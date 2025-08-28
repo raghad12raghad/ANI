@@ -1,5 +1,5 @@
-# === TriplePower Fundamentals — تحليل أساسي مُحافظ مع نسب وتقييم نوعي ===
-# الكاتب: Saeed + GPT-5 Thinking (منقّح)
+# === TriplePower Fundamentals — تحليل أساسي مُحافظ مع نسب وتقييم نوعي + تحليل شامل في النهاية ===
+# الكاتب: Saeed + GPT-5 Thinking (مع تحليل شامل)
 # المتطلبات: streamlit, yfinance, pandas, numpy, python 3.10+
 # التشغيل: streamlit run app.py
 
@@ -116,7 +116,7 @@ def html_table(df: pd.DataFrame) -> str:
 REV_KEYS = ["Total Revenue", "Revenue", "TotalRevenue", "Sales"]
 COGS_KEYS = ["Cost Of Revenue", "Cost of Revenue", "CostOfRevenue", "Cost Of Goods Sold", "COGS"]
 GP_KEYS   = ["Gross Profit", "GrossProfit"]
-OPINC_KEYS= ["Operating Income", "OperatingIncome", "EBIT"]  # EBIT كمساعد
+OPINC_KEYS= ["Operating Income", "OperatingIncome", "EBIT"]
 EBIT_KEYS = ["EBIT", "Operating Income", "OperatingIncome"]
 NI_KEYS   = ["Net Income", "NetIncome", "Net Income Common Stockholders", "Net Income Applicable To Common Shares"]
 PBT_KEYS  = ["Income Before Tax", "Pretax Income", "Earnings Before Tax"]
@@ -147,7 +147,6 @@ DA_KEYS = ["Depreciation", "Depreciation & Amortization", "Depreciation Amortiza
 
 @st.cache_data(ttl=3600)
 def load_company_data(ticker: str):
-    """يرجع dict يحوي القوائم المالية السنوية/الربع سنوية + السعر/الأسهم/القيمة السوقية + تاريخ الأسهم إن توفر."""
     t = yf.Ticker(ticker)
     def _df(getter, fallback=None):
         try:
@@ -171,7 +170,6 @@ def load_company_data(ticker: str):
         mcap = float(fi.get("market_cap", np.nan))
     except Exception:
         pass
-    # بدائل
     if (pd.isna(price) or price == 0):
         try:
             hist = t.history(period="1d")
@@ -186,7 +184,6 @@ def load_company_data(ticker: str):
     if pd.isna(mcap) and not pd.isna(price) and not pd.isna(shares) and shares>0:
         mcap = price * shares
 
-    # تاريخ الأسهم (اختياري)
     shares_hist = pd.Series(dtype=float)
     try:
         s = t.get_shares_full()
@@ -212,9 +209,8 @@ def compute_cagr_5y(inc_a: pd.DataFrame):
     if inc_a is None or inc_a.empty: return rev_cagr, ni_cagr
     cols = sorted_cols(inc_a)
     if len(cols) < 2: return rev_cagr, ni_cagr
-    # نحاول 5 فترات؛ إن لم تتوفر نستخدم أول/آخر
     use = cols[:min(5, len(cols))]
-    first, last = use[-1], use[0]  # الأقدم، الأحدث
+    first, last = use[-1], use[0]
     rev_first = find_any(inc_a, REV_KEYS, first)
     rev_last  = find_any(inc_a, REV_KEYS, last)
     ni_first  = find_any(inc_a, NI_KEYS, first)
@@ -225,15 +221,13 @@ def compute_cagr_5y(inc_a: pd.DataFrame):
             rev_cagr = (rev_last/rev_first)**(1/years)-1
     except Exception: pass
     try:
-        if ni_first and abs(ni_first)>0 and ni_last and abs(ni_last)>0 and ni_first>0 and ni_last>0:
+        if ni_first and ni_first>0 and ni_last and ni_last>0:
             ni_cagr = (ni_last/ni_first)**(1/years)-1
     except Exception:
-        # صافي الدخل قد يتقلب حول الصفر؛ نتجاهل CAGR حينها
         pass
     return rev_cagr, ni_cagr
 
 def margin_stability_trend(inc_a: pd.DataFrame):
-    """انحراف معياري لهامش إجمالي الربح واتجاه بسيط بين أول سنتين وآخر سنتين."""
     if inc_a is None or inc_a.empty: return np.nan, np.nan
     cols = sorted_cols(inc_a)
     take = cols[:min(6, len(cols))]
@@ -244,7 +238,7 @@ def margin_stability_trend(inc_a: pd.DataFrame):
         if not pd.isna(rev) and rev!=0 and not pd.isna(gp):
             margins.append(gp/rev)
     if len(margins) < 3: return np.nan, np.nan
-    margins = list(reversed(margins))  # زمنياً من الأقدم إلى الأحدث
+    margins = list(reversed(margins))
     std = float(np.nanstd(margins))
     first_avg = np.nanmean(margins[:2]) if len(margins)>=2 else np.nan
     last_avg  = np.nanmean(margins[-2:]) if len(margins)>=2 else np.nan
@@ -252,10 +246,6 @@ def margin_stability_trend(inc_a: pd.DataFrame):
     return std, trend
 
 def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 0.7):
-    """
-    mode: "Annual" أو "TTM"
-    يعيد: core (عرض)، raw (بنود)، trends، checklist_inputs (للتقييم)
-    """
     inc = data["inc_a"]; bal = data["bal_a"]; cf = data["cf_a"]
     quarterly = False
     if mode == "TTM" and not data["inc_q"].empty:
@@ -274,7 +264,6 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
     use_inc_cols = inc_cols[:4] if quarterly else inc_cols[:1]
     use_cf_cols  = cf_cols[:4]  if quarterly else (cf_cols[:1] if cf_cols else [])
 
-    # دخل
     rev  = sum([find_any(inc, REV_KEYS, c) for c in use_inc_cols])
     cogs = sum([find_any(inc, COGS_KEYS, c) for c in use_inc_cols])
     gp   = sum([find_any(inc, GP_KEYS,   c) for c in use_inc_cols])
@@ -286,7 +275,6 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
     ebit = sum([find_any(inc, EBIT_KEYS,  c) for c in use_inc_cols])
     if pd.isna(ebit) or ebit == 0: ebit = opi
 
-    # ميزانية (أحدث + سابقة للمتوسطات)
     bal_curr = bal_cols[0] if bal_cols else None
     bal_prev = bal_cols[1] if len(bal_cols) > 1 else None
     ta   = find_any(bal, TA_KEYS, bal_curr)
@@ -311,13 +299,11 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
     avg_assets = np.nanmean([ta, ta_prev]) if not pd.isna(ta) else np.nan
     avg_equity = np.nanmean([te, te_prev]) if not pd.isna(te) else np.nan
 
-    # تدفقات نقدية
     if cf is not None and not cf.empty and use_cf_cols:
         ocf = sum([find_any(cf, OCF_KEYS, c) for c in use_cf_cols])
         capex_vals = [find_any(cf, CAPEX_KEYS, c) for c in use_cf_cols]
         capex = sum([x for x in capex_vals if not pd.isna(x)])
-        capex_out = capex_outflow(capex)  # تصحيح الإشارة
-        # D&A (اختياري للـ Owner Earnings)
+        capex_out = capex_outflow(capex)
         da_vals = [find_any(cf, DA_KEYS, c) for c in use_cf_cols]
         da = sum([x for x in da_vals if not pd.isna(x)])
     else:
@@ -326,14 +312,12 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
     int_exp = sum([find_any(inc, INT_EXP_KEYS, c) for c in use_inc_cols])
     int_exp_abs = abs(int_exp) if not pd.isna(int_exp) else np.nan
 
-    # هوامش وربحية
     gross_margin     = safe_div(gp,  rev)
     operating_margin = safe_div(opi, rev)
     net_margin       = safe_div(ni,  rev)
     roe              = safe_div(ni,  avg_equity)
     roa              = safe_div(ni,  avg_assets)
 
-    # ROIC محافظ
     eff_tax_rate = tax_rate if (not pd.isna(tax_rate) and 0 <= tax_rate <= 0.6) else 0.25
     nopat = ebit * (1 - eff_tax_rate) if not pd.isna(ebit) else np.nan
     invested_capital = np.nan
@@ -341,7 +325,6 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
         invested_capital = total_debt + te - (cash if not pd.isna(cash) else 0)
     roic = safe_div(nopat, invested_capital)
 
-    # سيولة ومديونية
     current_ratio = safe_div(ca, cl)
     quick_ratio   = safe_div((ca - (inv if not pd.isna(inv) else 0)), cl)
     cash_ratio    = safe_div((cash if not pd.isna(cash) else 0) + (sti if not pd.isna(sti) else 0), cl)
@@ -349,19 +332,16 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
     debt_to_assets = safe_div(total_debt, ta)
     interest_coverage = safe_div(ebit, int_exp_abs)
 
-    # كفاءة
     asset_turnover = safe_div(rev, avg_assets)
 
-    # FCF و Owner Earnings
     fcf = np.nan if (pd.isna(ocf) or pd.isna(capex_out)) else (ocf - capex_out)
     owner_earnings = np.nan
     if not pd.isna(ocf) and not pd.isna(capex_out):
-        maint_capex = maint_capex_ratio * capex_out  # تقريب محافظ
+        maint_capex = maint_capex_ratio * capex_out
         owner_earnings = ocf - maint_capex
     fcf_margin = safe_div(fcf, rev)
     ocf_to_ni  = safe_div(ocf, ni)
 
-    # تقييمات سوقية
     price, shares, mcap = data.get("price", np.nan), data.get("shares", np.nan), data.get("mcap", np.nan)
     eps = safe_div(ni, shares)
     pe  = safe_div(price, eps)
@@ -376,37 +356,27 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
         ev = mcap + (total_debt if not pd.isna(total_debt) else 0) - (cash if not pd.isna(cash) else 0)
     ev_ebit = safe_div(ev, ebit)
 
-    # اتجاهات سنوية
     rev_cagr_5y, ni_cagr_5y = compute_cagr_5y(data["inc_a"])
     margin_std_5y, margin_trend_5y = margin_stability_trend(data["inc_a"])
 
     core = {
-        # ربحية وجودة
         "الهامش الإجمالي": gross_margin,
         "هامش التشغيل": operating_margin,
         "هامش صافي الربح": net_margin,
         "ROA": roa,
         "ROE": roe,
         "ROIC~": roic,
-
-        # سيولة/مديونية
         "Current Ratio": current_ratio,
         "Quick Ratio": quick_ratio,
         "Cash Ratio": cash_ratio,
         "D/E": debt_to_equity,
         "D/A": debt_to_assets,
         "تغطية الفوائد": interest_coverage,
-
-        # كفاءة مختصرة
         "دوران الأصول": asset_turnover,
-
-        # تدفقات ونِسَب
         "هامش FCF": fcf_margin,
         "OCF/NI": ocf_to_ni,
         "FCF Yield": fcf_yield,
         "Earnings Yield": earn_yield,
-
-        # تقييمات
         "P/E": pe,
         "P/B": pb,
         "P/S": ps,
@@ -430,54 +400,40 @@ def compute_ratios(data: dict, mode: str = "Annual", maint_capex_ratio: float = 
         "Gross Margin Trend(5y)": margin_trend_5y
     }
 
-    checklist_inputs = {
-        "shares_hist": data.get("shares_hist", pd.Series(dtype=float))
-    }
-
+    checklist_inputs = { "shares_hist": data.get("shares_hist", pd.Series(dtype=float)) }
     return core, raw, trends, checklist_inputs
 
 # =============================
-# تقييم محافظ (Buffett Score) + Checklist
+# Checklist & Score
 # =============================
 
 def buffett_checklist_and_score(core: dict, raw: dict, trends: dict,
                                 moat_score: float, mgmt_score: float):
-    """يرجع checklist dict و score (0-10)."""
-    # قواعد محافظة
-    moat_proxy = ( (core.get("ROIC~", np.nan) is not np.nan and core.get("ROIC~") >= 0.12) or
-                   (core.get("الهامش الإجمالي", np.nan) is not np.nan and core.get("الهامش الإجمالي") >= 0.40) )
+    moat_proxy = ( (not pd.isna(core.get("ROIC~")) and core["ROIC~"] >= 0.12) or
+                   (not pd.isna(core.get("الهامش الإجمالي")) and core["الهامش الإجمالي"] >= 0.40) )
     prudent_leverage = (
-        (core.get("D/E", np.nan) is not np.nan and core.get("D/E") <= 0.5) or
-        (core.get("تغطية الفوائد", np.nan) is not np.nan and core.get("تغطية الفوائد") >= 8)
+        (not pd.isna(core.get("D/E")) and core["D/E"] <= 0.5) or
+        (not pd.isna(core.get("تغطية الفوائد")) and core["تغطية الفوائد"] >= 8)
     )
     consistent_profitability = (
-        (core.get("ROE", np.nan) is not np.nan and core.get("ROE") >= 0.15) and
-        (core.get("هامش صافي الربح", np.nan) is not np.nan and core.get("هامش صافي الربح") > 0)
+        (not pd.isna(core.get("ROE")) and core["ROE"] >= 0.15) and
+        (not pd.isna(core.get("هامش صافي الربح")) and core["هامش صافي الربح"] > 0)
     )
     fcf_positive = (
-        (core.get("هامش FCF", np.nan) is not np.nan and core.get("هامش FCF") > 0) and
-        (core.get("OCF/NI", np.nan) is not np.nan and core.get("OCF/NI") >= 1)
+        (not pd.isna(core.get("هامش FCF")) and core["هامش FCF"] > 0) and
+        (not pd.isna(core.get("OCF/NI")) and core["OCF/NI"] >= 1)
     )
-    buyback_trend = None
-    sh = raw.get("Shares", np.nan)
-    # إذا توفر تاريخ الأسهم: قارن آخر قيمة بأقدم قيمة خلال ~5 سنوات
-    if "shares_hist" in trends or True:
-        pass
-    # نحاول داخل raw: لا يكفي. نستخدم trends-placeholder
-    # سنعيد None إذا لا يوجد تاريخ
-    # (ملاحظة: يُملأ عبر checklist_inputs خارج هذا الإجراء)
 
     score = 0
-    score += 2 if (core.get("ROIC~", np.nan) is not np.nan and core.get("ROIC~") >= 0.12) else 0
-    score += 2 if (core.get("ROE", np.nan) is not np.nan and core.get("ROE") >= 0.15) else 0
+    score += 2 if (not pd.isna(core.get("ROIC~")) and core["ROIC~"] >= 0.12) else 0
+    score += 2 if (not pd.isna(core.get("ROE")) and core["ROE"] >= 0.15) else 0
     score += 2 if prudent_leverage else 0
-    score += 1 if (core.get("هامش FCF", np.nan) is not np.nan and core.get("هامش FCF") >= 0.05 and
-                   core.get("FCF Yield", np.nan) is not np.nan and core.get("FCF Yield") >= 0.04) else 0
-    score += 1 if (core.get("OCF/NI", np.nan) is not np.nan and core.get("OCF/NI") >= 1) else 0
-    score += 1 if (trends.get("Rev CAGR 5y", np.nan) is not np.nan and trends["Rev CAGR 5y"] >= 0.05) else 0
-    score += 1 if (trends.get("Gross Margin Trend(5y)", np.nan) is not np.nan and trends["Gross Margin Trend(5y)"] >= 0) else 0
+    score += 1 if (not pd.isna(core.get("هامش FCF")) and core["هامش FCF"] >= 0.05 and
+                   not pd.isna(core.get("FCF Yield")) and core["FCF Yield"] >= 0.04) else 0
+    score += 1 if (not pd.isna(core.get("OCF/NI")) and core["OCF/NI"] >= 1) else 0
+    score += 1 if (not pd.isna(trends.get("Rev CAGR 5y")) and trends["Rev CAGR 5y"] >= 0.05) else 0
+    score += 1 if (not pd.isna(trends.get("Gross Margin Trend(5y)")) and trends["Gross Margin Trend(5y)"] >= 0) else 0
 
-    # تعديلات نوعية (±1 كحد أقصى لكل بُعد)
     if moat_score > 0.5: score += 1
     if moat_score < -0.5: score -= 1
     if mgmt_score > 0.5: score += 1
@@ -489,20 +445,17 @@ def buffett_checklist_and_score(core: dict, raw: dict, trends: dict,
         "رافعة متحفظة/تغطية فوائد": "✅" if prudent_leverage else "⚠️",
         "ربحية مستدامة": "✅" if consistent_profitability else "⚠️",
         "FCF إيجابي وجودته جيدة": "✅" if fcf_positive else "⚠️",
-        "اتجاه هوامش موجب": "✅" if (trends.get("Gross Margin Trend(5y)", np.nan) is not np.nan and trends["Gross Margin Trend(5y)"] >= 0) else "⚠️",
-        "نمو الإيرادات 5y ≥5%": "✅" if (trends.get("Rev CAGR 5y", np.nan) is not np.nan and trends["Rev CAGR 5y"] >= 0.05) else "⚠️",
-        "مؤشر إعادة شراء أسهم": "—"  # يُحدّث لاحقًا إن توفر تاريخ
+        "اتجاه هوامش موجب": "✅" if (not pd.isna(trends.get("Gross Margin Trend(5y)")) and trends["Gross Margin Trend(5y)"] >= 0) else "⚠️",
+        "نمو الإيرادات 5y ≥5%": "✅" if (not pd.isna(trends.get("Rev CAGR 5y")) and trends["Rev CAGR 5y"] >= 0.05) else "⚠️",
+        "مؤشر إعادة شراء أسهم": "—"
     }
     return checklist, score
 
 def format_core_row(core: dict):
     view = {}
-    as_pct = {"الهامش الإجمالي","هامش التشغيل","هامش صافي الربح","ROA","ROE","ROIC~","هامش FCF"}
-    as_pct |= {"FCF Yield","Earnings Yield"}
-    as_days = set()  # لا نستخدم أيام هنا
+    as_pct = {"الهامش الإجمالي","هامش التشغيل","هامش صافي الربح","ROA","ROE","ROIC~","هامش FCF","FCF Yield","Earnings Yield"}
     as_mult = {"P/E","P/B","P/S","EV/EBIT"}
     ratios = {"Current Ratio","Quick Ratio","Cash Ratio","D/E","D/A","تغطية الفوائد","دوران الأصول","OCF/NI"}
-
     for k,v in core.items():
         if k in as_pct:
             view[k] = to_percent(v)
@@ -511,6 +464,108 @@ def format_core_row(core: dict):
         else:
             view[k] = "—" if v is None or pd.isna(v) else f"{v:.2f}"
     return view
+
+# =============================
+# تحليل شامل (Portolio Intelligence)
+# =============================
+
+def company_narrative(code: str, core: dict, raw: dict, trends: dict, score: float) -> str:
+    """سرد نوعي سريع لكل شركة."""
+    roic = core.get("ROIC~"); roe = core.get("ROE"); nm = core.get("هامش صافي الربح")
+    de = core.get("D/E"); cov = core.get("تغطية الفوائد"); cr = core.get("Current Ratio")
+    fcfm = core.get("هامش FCF"); fcfy = core.get("FCF Yield"); ocfni = core.get("OCF/NI")
+    pe = core.get("P/E"); pb = core.get("P/B"); ev_ebit = core.get("EV/EBIT"); ey = core.get("Earnings Yield")
+    rev_cagr = trends.get("Rev CAGR 5y"); gm_trend = trends.get("Gross Margin Trend(5y)")
+    lbl = []
+
+    # جودة وربحية
+    if not pd.isna(roic) and roic >= 0.15:
+        lbl.append("جودة رأس المال **عالية** (ROIC≥15%)")
+    elif not pd.isna(roic):
+        lbl.append("ROIC متوسط/منخفض")
+
+    if not pd.isna(roe) and roe >= 0.15: lbl.append("ROE صحي")
+    if not pd.isna(nm) and nm > 0: lbl.append("ربحية صافية موجبة")
+
+    # ديون وسيولة
+    if not pd.isna(de) and de <= 0.5: lbl.append("رافعة **محافظة**")
+    elif not pd.isna(de) and de > 1.5: lbl.append("رافعة مرتفعة (⚠️)")
+    if not pd.isna(cov) and cov < 2: lbl.append("تغطية فوائد ضعيفة (⚠️)")
+    if not pd.isna(cr) and cr < 1: lbl.append("سيولة تشغيلية حرجة (⚠️)")
+
+    # تدفقات
+    if not pd.isna(fcfm) and fcfm > 0: lbl.append("**FCF إيجابي**")
+    if not pd.isna(ocfni) and ocfni >= 1: lbl.append("جودة أرباح (OCF/NI ≥1)")
+    if not pd.isna(fcfy) and fcfy >= 0.06: lbl.append("عائد FCF جذاب")
+
+    # نمو وهوامش
+    if not pd.isna(rev_cagr) and rev_cagr >= 0.05: lbl.append("نمو إيرادات ≥5%")
+    if not pd.isna(gm_trend) and gm_trend < 0: lbl.append("اتجاه هوامش سلبي (⚠️)")
+
+    # تقييم
+    if (not pd.isna(ev_ebit) and ev_ebit <= 10) or (not pd.isna(pe) and pe <= 15):
+        lbl.append("تقييم **معقول/جذاب**")
+    elif not pd.isna(pe) and pe > 35:
+        lbl.append("تقييم متمدّد (⚠️)")
+
+    verdict = "Compounder محتمل" if (not pd.isna(roic) and roic>=0.15 and not pd.isna(rev_cagr) and rev_cagr>=0.05 and not pd.isna(de) and de<=0.5) \
+              else ("قيمة مع محفزات" if (not pd.isna(fcfy) and fcfy>=0.06 and not pd.isna(ev_ebit) and ev_ebit<=10 and (pd.isna(gm_trend) or gm_trend>=0)) \
+              else "تحتاج متابعة/تحسين تشغيل")
+    return f"**{code} — {verdict} (Score {score:.1f}/10)**\n- " + "\n- ".join(lbl)
+
+def analyze_portfolio(records: list[dict]) -> str:
+    """تحليل شامل عبر جميع الشركات المُدخلة."""
+    if not records: return "—"
+    # تجهيز جداول
+    def take(metric): 
+        vals = [(r["code"], r["core"].get(metric)) for r in records if not pd.isna(r["core"].get(metric))]
+        return sorted(vals, key=lambda x: x[1], reverse=True)
+
+    top_roic = take("ROIC~")[:3]
+    top_fcfy = take("FCF Yield")[:3]
+    top_score = sorted([(r["code"], r["score"]) for r in records if not pd.isna(r["score"])], key=lambda x:x[1], reverse=True)[:3]
+
+    # أعلام حمراء
+    red_cov = [r["code"] for r in records if (not pd.isna(r["core"].get("تغطية الفوائد")) and r["core"]["تغطية الفوائد"]<2)]
+    red_de  = [r["code"] for r in records if (not pd.isna(r["core"].get("D/E")) and r["core"]["D/E"]>1.5)]
+    red_fcf = [r["code"] for r in records if (not pd.isna(r["core"].get("هامش FCF")) and r["core"]["هامش FCF"]<0)]
+    red_gmt = [r["code"] for r in records if (not pd.isna(r["trends"].get("Gross Margin Trend(5y)")) and r["trends"]["Gross Margin Trend(5y)"]<0)]
+
+    # تقييم وسيط
+    def median_of(metric):
+        arr = [r["core"].get(metric) for r in records if not pd.isna(r["core"].get(metric))]
+        return np.nan if not arr else float(np.nanmedian(arr))
+
+    med_pe = median_of("P/E"); med_pb = median_of("P/B"); med_ev_ebit = median_of("EV/EBIT")
+
+    # قوائم تشغيل
+    compounders = [r["code"] for r in records
+                   if (not pd.isna(r["core"].get("ROIC~")) and r["core"]["ROIC~"]>=0.15) and
+                      (not pd.isna(r["trends"].get("Rev CAGR 5y")) and r["trends"]["Rev CAGR 5y"]>=0.05) and
+                      (not pd.isna(r["core"].get("D/E")) and r["core"]["D/E"]<=0.5)]
+    values = [r["code"] for r in records
+              if (not pd.isna(r["core"].get("FCF Yield")) and r["core"]["FCF Yield"]>=0.06) and
+                 (not pd.isna(r["core"].get("EV/EBIT")) and r["core"]["EV/EBIT"]<=10) and
+                 (pd.isna(r["trends"].get("Gross Margin Trend(5y)")) or r["trends"]["Gross Margin Trend(5y)"]>=0)]
+
+    # بناء النص
+    def fmt_top(lst, pct=False):
+        if not lst: return "—"
+        items = []
+        for c,v in lst:
+            items.append(f"{c}: {to_percent(v) if pct else ('—' if pd.isna(v) else f'{v:.2f}x' if c!='' else str(v))}" if pct else f"{c}: {v:.2f}")
+        return ", ".join(items)
+
+    bullets = []
+    bullets.append(f"**القادة (ROIC)**: " + (", ".join([f"{c}: {to_percent(v)}" for c,v in top_roic]) if top_roic else "—"))
+    bullets.append(f"**القادة (FCF Yield)**: " + (", ".join([f"{c}: {to_percent(v)}" for c,v in top_fcfy]) if top_fcfy else "—"))
+    bullets.append(f"**أعلى Score**: " + (", ".join([f"{c}: {s:.1f}" for c,s in top_score]) if top_score else "—"))
+    bullets.append(f"**وسيط التقييم** — P/E: {'—' if pd.isna(med_pe) else f'{med_pe:.1f}x'}, P/B: {'—' if pd.isna(med_pb) else f'{med_pb:.1f}x'}, EV/EBIT: {'—' if pd.isna(med_ev_ebit) else f'{med_ev_ebit:.1f}x'}")
+    bullets.append(f"**Compounders محتملة**: {', '.join(compounders) if compounders else '—'}")
+    bullets.append(f"**Value Candidates**: {', '.join(values) if values else '—'}")
+    bullets.append(f"**أعلام حمراء** — تغطية فوائد<2: {', '.join(red_cov) if red_cov else '—'} | D/E>1.5: {', '.join(red_de) if red_de else '—'} | هامش FCF<0: {', '.join(red_fcf) if red_fcf else '—'} | اتجاه هوامش سلبي: {', '.join(red_gmt) if red_gmt else '—'}")
+
+    return "### 🧠 تحليل شامل (ملخص محفظي)\n" + "\n".join([f"- {b}" for b in bullets])
 
 # =============================
 # واجهة المستخدم
@@ -541,7 +596,6 @@ symbols_input = st.text_area(
     st.session_state.get("syms","")
 )
 
-# تنظيف الرموز + منطق .SR المُحسَّن
 raw_syms = [s.strip().upper() for s in symbols_input.replace("\n"," ").split() if s.strip()]
 symbols = []
 for s in raw_syms:
@@ -557,6 +611,9 @@ if st.button("🚀 احسب"):
         st.stop()
 
     rows, raw_rows, score_rows, errors = [], [], [], []
+    # للاستخبارات المجمعة
+    records = []
+
     progress = st.progress(0, text=f"بدء الحساب... (0/{len(symbols)})")
 
     for i, code in enumerate(symbols, start=1):
@@ -566,10 +623,8 @@ if st.button("🚀 احسب"):
             if core is None:
                 errors.append(code); continue
 
-            # Checklist + Score
             checklist, score = buffett_checklist_and_score(core, raw, trends, moat_score, mgmt_score)
 
-            # تحديث مؤشر إعادة شراء الأسهم إن توفر تاريخ
             sh_hist = checklist_inputs.get("shares_hist", pd.Series(dtype=float))
             if isinstance(sh_hist, pd.Series) and not sh_hist.empty:
                 sh_hist = sh_hist.sort_index()
@@ -592,19 +647,15 @@ if st.button("🚀 احسب"):
 
             if show_raw:
                 rv = {"الرمز": code}
-                for k,v in raw.items():
-                    if k in ["Price","Shares","MarketCap","EV"]:
-                        rv[k] = to_num(v, 2)
-                    else:
-                        rv[k] = to_num(v, 2)
-                # نقاط نوعية و Owner Earnings/Yield
-                oe = raw.get("OwnerEarnings", np.nan)
-                mcap = raw.get("MarketCap", np.nan)
+                for k,v in raw.items(): rv[k] = to_num(v, 2)
+                oe = raw.get("OwnerEarnings", np.nan); mcap = raw.get("MarketCap", np.nan)
                 rv["OwnerEarnings"] = to_num(oe)
                 rv["Owner Earnings Yield"] = to_percent(safe_div(oe, mcap))
-                # Checklist للشفافية
                 rv.update({f"CHK:{k}": v for k,v in checklist.items()})
                 raw_rows.append(rv)
+
+            # تخزين للسرد والتحليل الشامل
+            records.append({"code": code, "core": core, "raw": raw, "trends": trends, "score": score})
 
         except Exception as e:
             errors.append(f"{code} → {e}")
@@ -616,7 +667,6 @@ if st.button("🚀 احسب"):
         st.subheader(f"نتائج النِّسَب ({mode}) — {len(df)} شركة")
         st.dataframe(df, use_container_width=True)
 
-        # جدول النقاط والاتجاهات
         df_score = pd.DataFrame(score_rows)
         st.markdown("#### 🧮 نقاط الجودة والاتجاهات")
         st.dataframe(df_score, use_container_width=True)
@@ -629,6 +679,14 @@ if st.button("🚀 احسب"):
             st.download_button("📥 تنزيل CSV", csv_bytes, file_name=f"fundamentals_{mode}.csv", mime="text/csv")
         with c2:
             st.download_button("📥 تنزيل HTML", html_out.encode("utf-8"), file_name=f"fundamentals_{mode}.html", mime="text/html")
+
+        # --- 🔥 التحليل الشامل في النهاية ---
+        st.markdown("---")
+        st.markdown(analyze_portfolio(records))
+        # سرد لكل شركة
+        with st.expander("🗂️ تحليلات لكل شركة"):
+            for r in records:
+                st.markdown(company_narrative(r["code"], r["core"], r["raw"], r["trends"], r["score"]))
 
     if show_raw and raw_rows:
         st.markdown("---")
