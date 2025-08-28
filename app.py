@@ -1,19 +1,23 @@
-# === TriplePower Fundamentals — Buffett-Style + تحليل شامل مُحافظ (نسخة مُصلّحة) ===
-# المتطلبات: streamlit, yfinance, pandas, numpy  |  Python 3.9+
+# === TriplePower Fundamentals — Buffett-Style (وضع نصّي) ===
+# المتطلبات: streamlit, yfinance, pandas, numpy | Python 3.9+
 # التشغيل: streamlit run app.py
 
-import re, warnings
+import re
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 from html import escape
+
+APP_VERSION = "v1.3-text-mode"
 
 # =============================
 # تهيئة الصفحة + RTL
 # =============================
 st.set_page_config(page_title="📊 التحليل الأساسي | Buffett-Style", layout="wide")
+st.caption(f"الإصدار: {APP_VERSION}")
+
 RTL_CSS = """
 <style>
   :root, html, body, .stApp { direction: rtl; }
@@ -78,7 +82,6 @@ def sorted_cols(df: pd.DataFrame):
         return list(df.columns)
 
 def capex_outflow_value(value):
-    """Yahoo يسجّل CapEx بالسالب غالبًا؛ نحتاجه كتدفق خارج موجب."""
     if value is None or pd.isna(value): return np.nan
     try:
         return abs(float(value))
@@ -124,13 +127,13 @@ TA_KEYS   = ["Total Assets", "TotalAssets"]
 TE_KEYS   = ["Total Stockholder Equity", "Total Shareholder Equity", "Total Equity Gross Minority Interest", "Total Stockholders Equity"]
 CA_KEYS   = ["Total Current Assets", "Current Assets", "TotalCurrentAssets"]
 CL_KEYS   = ["Total Current Liabilities", "Current Liabilities", "TotalCurrentLiabilities"]
-INV_KEYS  = ["Inventory", "Inventory Net"]
-AR_KEYS   = ["Net Receivables", "Accounts Receivable", "Receivables"]
-AP_KEYS   = ["Accounts Payable", "Payables"]
-CASH_KEYS = ["Cash And Cash Equivalents", "Cash And Cash Equivalents, And Short Term Investments", "Cash"]
-STI_KEYS  = ["Short Term Investments"]
-LTD_KEYS  = ["Long Term Debt"]
-SLTD_KEYS = ["Short Long Term Debt"]
+INV_KEYS   = ["Inventory", "Inventory Net"]
+AR_KEYS    = ["Net Receivables", "Accounts Receivable", "Receivables"]
+AP_KEYS    = ["Accounts Payable", "Payables"]
+CASH_KEYS  = ["Cash And Cash Equivalents", "Cash And Cash Equivalents, And Short Term Investments", "Cash"]
+STI_KEYS   = ["Short Term Investments"]
+LTD_KEYS   = ["Long Term Debt"]
+SLTD_KEYS  = ["Short Long Term Debt"]
 CUR_DEBT_KEYS = ["Current Debt"]
 TOT_DEBT_KEYS = ["Total Debt"]
 
@@ -160,7 +163,6 @@ def load_company_data(ticker: str) -> Dict[str, object]:
     cf_a  = _df(lambda: t.cashflow)
     cf_q  = _df(lambda: t.quarterly_cashflow)
 
-    # price / shares / mcap (آمنة ضد None)
     price = np.nan; shares = np.nan; mcap = np.nan
     try:
         fi = t.fast_info
@@ -179,24 +181,21 @@ def load_company_data(ticker: str) -> Dict[str, object]:
             if not hist.empty: price = float(hist["Close"].iloc[-1])
         except Exception: pass
 
-    if (pd.isna(shares) or shares == 0) or (pd.isna(mcap)):
+    if (pd.isna(shares) or pd.isna(mcap)):
         try:
-            info = t.get_info()  # قد تكون أبطأ لكنها بديلة
-            if pd.isna(shares):
-                shares = float(info.get("sharesOutstanding", np.nan))
-            if pd.isna(mcap):
-                mcap = float(info.get("marketCap", np.nan))
-        except Exception:
-            pass
+            info = t.get_info()
+            if pd.isna(shares): shares = float(info.get("sharesOutstanding", np.nan))
+            if pd.isna(mcap):   mcap = float(info.get("marketCap", np.nan))
+        except Exception: pass
 
-    if pd.isna(mcap) and not pd.isna(price) and not pd.isna(shares) and shares > 0:
+    if pd.isna(mcap) and not pd.isna(price) and not pd.isna(shares) and shares>0:
         mcap = price * shares
 
     shares_hist = pd.Series(dtype=float)
     try:
         s = t.get_shares_full()
-        if isinstance(s, (pd.Series, pd.DataFrame)) and not (len(s) == 0):
-            shares_hist = s.squeeze().dropna()
+        if isinstance(s, (pd.Series, pd.DataFrame)) and len(s)!=0:
+            shares_hist = pd.Series(s).squeeze().dropna()
     except Exception:
         pass
 
@@ -270,7 +269,7 @@ def compute_ratios(data: Dict[str, object], mode: str = "Annual", maint_capex_ra
     use_inc_cols = inc_cols[:4] if quarterly else inc_cols[:1]
     use_cf_cols  = cf_cols[:4]  if quarterly else (cf_cols[:1] if cf_cols else [])
 
-    # دخل (مجموع يتحمّل NaN)
+    # دخل
     rev  = nansum([find_any(inc, REV_KEYS, c) for c in use_inc_cols])
     cogs = nansum([find_any(inc, COGS_KEYS, c) for c in use_inc_cols])
     gp   = nansum([find_any(inc, GP_KEYS,   c) for c in use_inc_cols])
@@ -321,7 +320,7 @@ def compute_ratios(data: Dict[str, object], mode: str = "Annual", maint_capex_ra
     int_exp = nansum([find_any(inc, INT_EXP_KEYS, c) for c in use_inc_cols])
     int_exp_abs = abs(int_exp) if not pd.isna(int_exp) else np.nan
 
-    # ربحية
+    # ربحية وجودة
     gross_margin     = safe_div(gp,  rev)
     operating_margin = safe_div(opi, rev)
     net_margin       = safe_div(ni,  rev)
@@ -344,12 +343,12 @@ def compute_ratios(data: Dict[str, object], mode: str = "Annual", maint_capex_ra
     debt_to_assets = safe_div(total_debt, ta)
     interest_coverage = safe_div(ebit, int_exp_abs)
 
-    # كفاءة
+    # كفاءة مختصرة
     asset_turnover = safe_div(rev, avg_assets)
 
     # FCF و Owner Earnings
     fcf = np.nan if (pd.isna(ocf) or pd.isna(capex_out)) else (ocf - capex_out)
-    owner_earnings = np.nan if (pd.isna(ocf) or pd.isna(capex_out)) else (ocf - (maint_capex_ratio * capex_out))
+    owner_earnings = np.nan if (pd.isna(ocf) or pd.isna(capex_out)) else (ocf - (0.7 * capex_out))
     fcf_margin = safe_div(fcf, rev)
     ocf_to_ni  = safe_div(ocf, ni)
 
@@ -463,47 +462,34 @@ def buffett_checklist_and_score(core: Dict, raw: Dict, trends: Dict,
     }
     return checklist, float(score)
 
-def format_core_row(core: Dict):
-    view = {}
-    as_pct = {"الهامش الإجمالي","هامش التشغيل","هامش صافي الربح","ROA","ROE","ROIC~","هامش FCF","FCF Yield","Earnings Yield"}
-    as_mult = {"P/E","P/B","P/S","EV/EBIT"}
-    ratios = {"Current Ratio","Quick Ratio","Cash Ratio","D/E","D/A","تغطية الفوائد","دوران الأصول","OCF/NI"}
-    for k,v in core.items():
-        if k in as_pct:
-            view[k] = to_percent(v)
-        elif k in as_mult or k in ratios:
-            view[k] = "—" if v is None or pd.isna(v) else f"{v:.2f}x"
-        else:
-            view[k] = "—" if v is None or pd.isna(v) else f"{v:.2f}"
-    return view
-
-# =============================
-# تحليل شامل (ملخص محفظي + سرد)
-# =============================
 def company_narrative(code: str, core: Dict, raw: Dict, trends: Dict, score: float) -> str:
     roic = core.get("ROIC~"); roe = core.get("ROE"); nm = core.get("هامش صافي الربح")
     de = core.get("D/E"); cov = core.get("تغطية الفوائد"); cr = core.get("Current Ratio")
     fcfm = core.get("هامش FCF"); fcfy = core.get("FCF Yield"); ocfni = core.get("OCF/NI")
     pe = core.get("P/E"); ev_ebit = core.get("EV/EBIT")
     rev_cagr = trends.get("Rev CAGR 5y"); gm_trend = trends.get("Gross Margin Trend(5y)")
-    lbl = []
-    if not pd.isna(roic) and roic >= 0.15: lbl.append("جودة رأس المال **عالية** (ROIC≥15%)")
-    elif not pd.isna(roic): lbl.append("ROIC متوسط/منخفض")
-    if not pd.isna(roe) and roe >= 0.15: lbl.append("ROE صحي")
-    if not pd.isna(nm) and nm > 0: lbl.append("ربحية صافية موجبة")
-    if not pd.isna(de) and de <= 0.5: lbl.append("رافعة **محافظة**")
-    elif not pd.isna(de) and de > 1.5: lbl.append("رافعة مرتفعة (⚠️)")
-    if not pd.isna(cov) and cov < 2: lbl.append("تغطية فوائد ضعيفة (⚠️)")
-    if not pd.isna(cr) and cr < 1: lbl.append("سيولة تشغيلية حرجة (⚠️)")
-    if not pd.isna(fcfm) and fcfm > 0: lbl.append("**FCF إيجابي**")
-    if not pd.isna(ocfni) and ocfni >= 1: lbl.append("جودة أرباح (OCF/NI ≥1)")
-    if not pd.isna(fcfy) and fcfy >= 0.06: lbl.append("عائد FCF جذاب")
-    if not pd.isna(rev_cagr) and rev_cagr >= 0.05: lbl.append("نمو إيرادات ≥5%")
-    if not pd.isna(gm_trend) and gm_trend < 0: lbl.append("اتجاه هوامش سلبي (⚠️)")
+
+    tags = []
+    if not pd.isna(roic) and roic >= 0.15: tags.append("ROIC≥15% (جودة عالية)")
+    if not pd.isna(roe)  and roe  >= 0.15: tags.append("ROE قوي")
+    if not pd.isna(nm)   and nm   > 0:     tags.append("ربحية صافية موجبة")
+    if not pd.isna(de)   and de   <=0.5:   tags.append("رافعة محافظة")
+    if not pd.isna(cov)  and cov  < 2:     tags.append("تغطية فوائد ضعيفة ⚠️")
+    if not pd.isna(cr)   and cr   < 1:     tags.append("سيولة حرجة ⚠️")
+    if not pd.isna(fcfm) and fcfm > 0:     tags.append("FCF إيجابي")
+    if not pd.isna(ocfni)and ocfni>=1:     tags.append("جودة أرباح (OCF/NI≥1)")
+    if not pd.isna(fcfy) and fcfy >=0.06:  tags.append("عائد FCF جذاب")
+    if not pd.isna(rev_cagr) and rev_cagr>=0.05: tags.append("نمو إيرادات ≥5%")
+    if not pd.isna(gm_trend) and gm_trend<0:     tags.append("اتجاه هوامش سلبي ⚠️")
+
     verdict = "Compounder محتمل" if (not pd.isna(roic) and roic>=0.15 and not pd.isna(rev_cagr) and rev_cagr>=0.05 and not pd.isna(de) and de<=0.5) \
               else ("قيمة مع محفزات" if (not pd.isna(fcfy) and fcfy>=0.06 and not pd.isna(ev_ebit) and ev_ebit<=10 and (pd.isna(gm_trend) or gm_trend>=0)) \
-              else "تحتاج متابعة/تحسين تشغيل")
-    return f"**{code} — {verdict} (Score {score:.1f}/10)**\n- " + "\n- ".join(lbl)
+              else "تحتاج متابعة تشغيلية")
+    line1 = f"{code} — {verdict} | Score {score:.1f}/10"
+    line2 = f"ROIC {to_percent(roic)}, ROE {to_percent(roe)}, هامش صافي {to_percent(nm)}, D/E {'—' if pd.isna(de) else f'{de:.2f}x'}, تغطية فوائد {'—' if pd.isna(cov) else f'{cov:.2f}x'}"
+    line3 = f"هامش FCF {to_percent(fcfm)}, FCF Yield {to_percent(fcfy)}, OCF/NI {'—' if pd.isna(ocfni) else f'{ocfni:.2f}x'}, EV/EBIT {'—' if pd.isna(ev_ebit) else f'{ev_ebit:.2f}x'}"
+    line4 = "علامات: " + (", ".join(tags) if tags else "—")
+    return "\n".join([line1, line2, line3, line4])
 
 def analyze_portfolio(records: List[Dict]) -> str:
     if not records: return "—"
@@ -513,44 +499,48 @@ def analyze_portfolio(records: List[Dict]) -> str:
     top_roic = take("ROIC~")[:3]
     top_fcfy = take("FCF Yield")[:3]
     top_score = sorted([(r["code"], r["score"]) for r in records if not pd.isna(r["score"])], key=lambda x:x[1], reverse=True)[:3]
-    red_cov = [r["code"] for r in records if (not pd.isna(r["core"].get("تغطية الفوائد")) and r["core"]["تغطية الفوائد"]<2)]
-    red_de  = [r["code"] for r in records if (not pd.isna(r["core"].get("D/E")) and r["core"]["D/E"]>1.5)]
-    red_fcf = [r["code"] for r in records if (not pd.isna(r["core"].get("هامش FCF")) and r["core"]["هامش FCF"]<0)]
-    red_gmt = [r["code"] for r in records if (not pd.isna(r["trends"].get("Gross Margin Trend(5y)")) and r["trends"]["Gross Margin Trend(5y)"]<0)]
     def median_of(metric):
         arr = [r["core"].get(metric) for r in records if not pd.isna(r["core"].get(metric))]
         return np.nan if not arr else float(np.nanmedian(arr))
     med_pe = median_of("P/E"); med_pb = median_of("P/B"); med_ev_ebit = median_of("EV/EBIT")
+
     bullets = []
-    bullets.append(f"**القادة (ROIC)**: " + (", ".join([f\"{c}: {to_percent(v)}\" for c,v in top_roic]) if top_roic else "—"))
-    bullets.append(f"**القادة (FCF Yield)**: " + (", ".join([f\"{c}: {to_percent(v)}\" for c,v in top_fcfy]) if top_fcfy else "—"))
-    bullets.append(f"**أعلى Score**: " + (", ".join([f\"{c}: {s:.1f}\" for c,s in top_score]) if top_score else "—"))
-    bullets.append(f"**وسيط التقييم** — P/E: {'—' if pd.isna(med_pe) else f'{med_pe:.1f}x'}, P/B: {'—' if pd.isna(med_pb) else f'{med_pb:.1f}x'}, EV/EBIT: {'—' if pd.isna(med_ev_ebit) else f'{med_ev_ebit:.1f}x'}")
-    bullets.append(f"**Compounders محتملة**: {', '.join([r['code'] for r in records if r['code'] in [c for c,_ in top_roic]]) if top_roic else '—'}")
-    bullets.append(f"**Value Candidates**: {', '.join([r['code'] for r in records if (not pd.isna(r['core'].get('FCF Yield')) and r['core']['FCF Yield']>=0.06) and (not pd.isna(r['core'].get('EV/EBIT')) and r['core']['EV/EBIT']<=10)]) or '—'}")
-    bullets.append(f"**أعلام حمراء** — تغطية فوائد<2: {', '.join(red_cov) if red_cov else '—'} | D/E>1.5: {', '.join(red_de) if red_de else '—'} | هامش FCF<0: {', '.join(red_fcf) if red_fcf else '—'} | اتجاه هوامش سلبي: {', '.join(red_gmt) if red_gmt else '—'}")
-    return "### 🧠 تحليل شامل (ملخص محفظي)\n" + "\n".join([f"- {b}" for b in bullets])
+    bullets.append("القادة (ROIC): " + (", ".join([f"{c}: {to_percent(v)}" for c,v in top_roic]) if top_roic else "—"))
+    bullets.append("القادة (FCF Yield): " + (", ".join([f"{c}: {to_percent(v)}" for c,v in top_fcfy]) if top_fcfy else "—"))
+    bullets.append("أعلى Score: " + (", ".join([f"{c}: {s:.1f}" for c,s in top_score]) if top_score else "—"))
+    bullets.append(f"وسيط التقييم — P/E: {'—' if pd.isna(med_pe) else f'{med_pe:.1f}x'}, P/B: {'—' if pd.isna(med_pb) else f'{med_pb:.1f}x'}, EV/EBIT: {'—' if pd.isna(med_ev_ebit) else f'{med_ev_ebit:.1f}x'}")
+    return "### ملخص محفظي\n- " + "\n- ".join(bullets)
+
+def build_text_report(records: List[Dict], mode: str) -> str:
+    lines = [f"تقرير أساسي (وضع نصّي) — الفترة: {mode}", "-"*40]
+    lines.append("## ملخص محفظي")
+    lines.append(analyze_portfolio(records).replace("### ملخص محفظي\n", ""))
+    lines.append("\n## تحليلات الشركات")
+    for r in records:
+        lines.append("\n" + company_narrative(r["code"], r["core"], r["raw"], r["trends"], r["score"]))
+    return "\n".join(lines)
 
 # =============================
 # واجهة المستخدم
 # =============================
 st.title("📊 التحليل الأساسي | Buffett-Style Fundamentals")
-st.caption("تفكير محافظ، قرار مبني على جودة الأعمال والتدفقات—بدون ضوضاء مضاربية.")
+st.caption("مخرجات نصّية قابلة للنسخ أو التنزيل — بدون ضوضاء مضاربية.")
 
 with st.sidebar:
     st.markdown("### ⚙️ الإعدادات")
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي"])
     suffix = "" if market == "السوق الأمريكي" else ".SR"
     mode = st.radio("الفترة", ["Annual", "TTM"], index=1, help="TTM = مجموع 4 أرباع؛ Annual = آخر سنة مالية.")
-    top_only = st.checkbox("عرض النِّسَب الأساسية فقط", value=True)
-    show_raw = st.checkbox("إظهار البنود الخام", value=False)
+    text_only = st.checkbox("وضع نصّي (بدون جداول)", value=True)
+    show_raw = st.checkbox("إظهار البنود الخام (للتحميل فقط)", value=False)
     st.markdown("---")
-    st.markdown("### 🧭 افتراضات نوعية (اختياري)")
     moat_score = st.slider("خندق تنافسي (–1 إلى +1)", -1.0, 1.0, 0.0, 0.1)
     mgmt_score = st.slider("جودة الإدارة (–1 إلى +1)", -1.0, 1.0, 0.0, 0.1)
-    maint_capex_ratio = st.slider("٪ كابكس صيانة من CapEx", 0.4, 1.0, 0.7, 0.05, help="يؤثر على Owner Earnings.")
+    if st.button("♻️ تحديث قسري (مسح الكاش)"):
+        st.cache_data.clear()
+        st.success("تم مسح الكاش. أعد التشغيل أو اضغط احسب.")
+
     st.markdown("---")
-    st.markdown("#### 🧪 رموز تجريبية")
     if st.button("USA: AAPL MSFT NVDA"): st.session_state.syms = "AAPL MSFT NVDA"
     if st.button("KSA: 1120 2380 1050"): st.session_state.syms = "1120 2380 1050"
 
@@ -569,21 +559,18 @@ if st.button("🚀 احسب"):
     if not symbols:
         st.warning("أدخل رمزًا واحدًا على الأقل."); st.stop()
 
-    rows, raw_rows, score_rows, errors, records = [], [], [], [], []
+    records, raw_rows, errors = [], [], []
     progress = st.progress(0.0)
     status = st.empty()
 
     for i, code in enumerate(symbols, start=1):
         try:
             data = load_company_data(code)
-            out = compute_ratios(data, mode=mode, maint_capex_ratio=maint_capex_ratio)
-            if out[0] is None:
-                errors.append(code); continue
-            core, raw, trends, checklist_inputs = out
-
+            core, raw, trends, checklist_inputs = compute_ratios(data, mode=mode)
+            if core is None: errors.append(code); continue
             checklist, score = buffett_checklist_and_score(core, raw, trends, moat_score, mgmt_score)
 
-            # تحديث buyback إن توفر تاريخ
+            # buyback مؤشر
             sh_hist = checklist_inputs.get("shares_hist", pd.Series(dtype=float))
             if isinstance(sh_hist, pd.Series) and not sh_hist.empty:
                 sh_hist = sh_hist.sort_index()
@@ -591,29 +578,12 @@ if st.button("🚀 احسب"):
                 buyback = (last - first)/first if first>0 else np.nan
                 checklist["مؤشر إعادة شراء أسهم"] = "✅" if (not pd.isna(buyback) and buyback <= -0.01) else ("⚠️" if not pd.isna(buyback) else "—")
 
-            view = format_core_row(core)
-            row = {"الرمز": code}; row.update(view)
-            rows.append(row)
-
-            score_rows.append({
-                "الرمز": code,
-                "Buffett Score (0–10)": f"{score:.1f}",
-                "Rev CAGR 5y": to_percent(trends.get("Rev CAGR 5y")),
-                "NI CAGR 5y": to_percent(trends.get("NI CAGR 5y")),
-                "ثبات الهامش σ(5y)": ("—" if pd.isna(trends.get("Gross Margin σ(5y)")) else f"{trends.get('Gross Margin σ(5y'):.3f}").replace("('Gross Margin σ(5y'", "('Gross Margin σ(5y)"),
-                "اتجاه الهامش 5y": to_percent(trends.get("Gross Margin Trend(5y")))
-            })
+            records.append({"code": code, "core": core, "raw": raw, "trends": trends, "score": score})
 
             if show_raw:
                 rv = {"الرمز": code}
                 for k,v in raw.items(): rv[k] = to_num(v, 2)
-                oe = raw.get("OwnerEarnings", np.nan); mcap = raw.get("MarketCap", np.nan)
-                rv["OwnerEarnings"] = to_num(oe)
-                rv["Owner Earnings Yield"] = to_percent(safe_div(oe, mcap))
-                rv.update({f"CHK:{k}": v for k,v in checklist.items()})
                 raw_rows.append(rv)
-
-            records.append({"code": code, "core": core, "raw": raw, "trends": trends, "score": score})
 
         except Exception as e:
             errors.append(f"{code} → {e}")
@@ -621,43 +591,45 @@ if st.button("🚀 احسب"):
             progress.progress(i/len(symbols))
             status.text(f"تم {i}/{len(symbols)}")
 
-    if rows:
-        df = pd.DataFrame(rows)
-        st.subheader(f"نتائج النِّسَب ({mode}) — {len(df)} شركة")
-        st.dataframe(df, use_container_width=True)
-
-        df_score = pd.DataFrame(score_rows)
-        st.markdown("#### 🧮 نقاط الجودة والاتجاهات")
-        st.dataframe(df_score, use_container_width=True)
-
-        html_out = html_table(df)
-        csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-        c1,c2 = st.columns(2)
-        with c1:
-            st.download_button("📥 تنزيل CSV", csv_bytes, file_name=f"fundamentals_{mode}.csv", mime="text/csv")
-        with c2:
-            st.download_button("📥 تنزيل HTML", html_out.encode("utf-8"), file_name=f"fundamentals_{mode}.html", mime="text/html")
-
-        st.markdown("---")
+    # إخراج نصّي فقط
+    if text_only and records:
+        st.subheader("🧠 ملخص محفظي (نص)")
         st.markdown(analyze_portfolio(records))
-        with st.expander("🗂️ تحليلات لكل شركة"):
-            for r in records:
-                st.markdown(company_narrative(r["code"], r["core"], r["raw"], r["trends"], r["score"]))
+        st.markdown("---")
+        st.subheader("🗂️ تحليلات كل شركة (نص)")
+        for r in records:
+            st.markdown("---")
+            st.markdown(company_narrative(r["code"], r["core"], r["raw"], r["trends"], r["score"]))
+
+        full_text = build_text_report(records, mode)
+        st.markdown("---")
+        st.subheader("📋 تقرير نصّي قابل للنسخ")
+        st.text_area("النص الكامل", full_text, height=420)
+        st.download_button("📥 تنزيل TXT", full_text.encode("utf-8"), file_name=f"fundamentals_{mode}.txt", mime="text/plain")
+
+    # خيار إضافي لتنزيل الجداول فقط عند الحاجة
+    if (not text_only) and records:
+        # نبني DataFrame سريع لأغراض التنزيل فقط
+        rows = []
+        for r in records:
+            c = r["core"]
+            row = {"الرمز": r["code"],
+                   "ROIC": to_percent(c.get("ROIC~")), "ROE": to_percent(c.get("ROE")),
+                   "هامش صافي": to_percent(c.get("هامش صافي الربح")),
+                   "D/E": "—" if pd.isna(c.get("D/E")) else f"{c.get('D/E'):.2f}x",
+                   "FCF Yield": to_percent(c.get("FCF Yield")), "EV/EBIT": "—" if pd.isna(c.get("EV/EBIT")) else f"{c.get('EV/EBIT'):.2f}x"}
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        st.subheader("نتائج (جداول اختيارية)")
+        st.dataframe(df, use_container_width=True)
+        html_out = html_table(df)
+        st.download_button("📥 تنزيل HTML", html_out.encode("utf-8"), file_name=f"fundamentals_{mode}.html", mime="text/html")
 
     if show_raw and raw_rows:
         st.markdown("---")
-        st.subheader("القيم الخام + شفافيات التقييم")
+        st.subheader("القيم الخام (للتدقيق/التحميل)")
         st.dataframe(pd.DataFrame(raw_rows), use_container_width=True)
 
     if errors:
         st.info("⚠️ ملاحظات:")
         for e in errors: st.write("• ", e)
-
-with st.expander("📌 منهجية وفرضيات"):
-    st.markdown("""
-- **CapEx** يُعامل كتدفق خارج موجب ⇒ **FCF = OCF − CapEx**.  
-- **ROIC~**: NOPAT≈EBIT×(1–الضريبة الفعّالة) على (الدين + حقوق المساهمين − النقد).  
-- **Owner Earnings** ≈ OCF − Maintenance CapEx (افتراضي 70% من CapEx).  
-- **CAGR 5y** من القوائم السنوية؛ إذا صافي الدخل ≤0 عند الأطراف نتجاهل الـCAGR له.  
-- **Buffett Score** قواعد محافظة + إدخال نوعي (إدارة/خندق). لا يُعد توصية.
-""")
