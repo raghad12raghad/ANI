@@ -1,4 +1,4 @@
-# ===اختراق اليوم الاول شرهي اول مرة و اسبوعي ايجابي
+# === اختراق اليوم الاول شرهي اول مرة و اسبوعي ايجابي (وضع ضيف بدون مصادقة) ===
 import os
 import re
 from dotenv import load_dotenv
@@ -9,23 +9,16 @@ import yfinance as yf
 from datetime import datetime, date, timedelta
 from html import escape
 from zoneinfo import ZoneInfo  # لضبط التوقيت المحلي
-import hashlib, secrets, base64  # تشفير كلمات المرور
 
 # =============================
-# تحميل متغيرات البيئة
+# تحميل متغيرات البيئة (اختياري)
 # =============================
 load_dotenv()
-SHEET_CSV_URL = os.getenv("SHEET_CSV_URL")
-
-# إيقاف آمن إذا لم يتم ضبط متغير البيئة
-if not SHEET_CSV_URL:
-    st.error("⚠️ لم يتم ضبط SHEET_CSV_URL في متغيرات البيئة. أضفه ثم أعد التشغيل.")
-    st.stop()
 
 # =============================
 # تهيئة الصفحة العامة + دعم RTL
 # =============================
-st.set_page_config(page_title="🔒🔍 فلتر الاشتراكات واختراق الشموع | TriplePower", layout="wide")
+st.set_page_config(page_title="🔍 فلتر الاشتراكات واختراق الشموع | TriplePower (Guest)", layout="wide")
 
 # حقن CSS عالمي لجعل الاتجاه RTL في كامل التطبيق
 RTL_CSS = """
@@ -82,51 +75,6 @@ def load_symbols_names(file_path: str, market_type: str) -> dict:
     except Exception as e:
         st.warning(f"⚠️ خطأ في تحميل ملف {file_path}: {e}")
         return {}
-
-# ===== تشفير كلمات المرور (PBKDF2) =====
-PBKDF_ITER = 100_000
-
-def _pbkdf2_hash(password: str, salt: bytes | None = None) -> str:
-    salt = salt or os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF_ITER)
-    return f"pbkdf2$sha256${PBKDF_ITER}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
-
-def _pbkdf2_verify(password: str, stored: str) -> bool:
-    try:
-        algo, algoname, iters, b64salt, b64hash = stored.split("$", 4)
-        if algo != "pbkdf2" or algoname != "sha256":
-            return False
-        iters = int(iters)
-        salt = base64.b64decode(b64salt)
-        expected = base64.b64decode(b64hash)
-        test = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
-        return secrets.compare_digest(test, expected)
-    except Exception:
-        return False
-
-# ===== كاش لتحميل بيانات المستخدمين =====
-@st.cache_data(ttl=3600)
-def load_users():
-    df = pd.read_csv(SHEET_CSV_URL, dtype=str)
-    return df.to_dict("records")
-
-def check_login(username, password, users):
-    for u in users:
-        if u.get("username") == username:
-            pwd_hash = u.get("password_hash")
-            if pwd_hash:  # المسار الآمن
-                return u if _pbkdf2_verify(password, pwd_hash) else None
-            # توافق خلفي مع العمود القديم
-            if u.get("password") == password:
-                return u
-    return None
-
-def is_expired(expiry_date: str) -> bool:
-    try:
-        exp = datetime.strptime(expiry_date.strip(), "%Y-%m-%d").date()
-        return exp < date.today()
-    except Exception:
-        return True
 
 @st.cache_data(ttl=300)
 def fetch_data(symbols, sd, ed, iv):
@@ -189,7 +137,7 @@ def drop_last_if_incomplete(df: pd.DataFrame, tf: str, suffix: str, allow_intrad
             return dfx
         if suffix == ".SR":
             now = datetime.now(ZoneInfo("Asia/Riyadh"))
-            after_close = (now.hour > 15) or (now.hour == 15 and now.minute >= 10)  # تداول
+            after_close = (now.hour > 15) or (now.hour == 15 and now.minute >= 10)  # تداول السعودية
             if last_dt == now.date() and not after_close:
                 return dfx.iloc[:-1] if len(dfx) > 1 else dfx.iloc[0:0]
         else:
@@ -394,82 +342,19 @@ def generate_html_table(df: pd.DataFrame) -> str:
     return html
 
 # =============================
-# جلسة العمل (حالة المستخدم)
+# واجهة ضيف (بدون مصادقة)
 # =============================
-st.session_state.setdefault("authenticated", False)
-st.session_state.setdefault("user", None)
-st.session_state.setdefault("login_error", None)
-
-def do_login():
-    users = load_users()
-    me = check_login(st.session_state.login_username, st.session_state.login_password, users)
-    if me is None:
-        st.session_state.login_error = "bad"
-    elif is_expired(me["expiry"]):
-        st.session_state.login_error = "expired"
-    else:
-        st.session_state.authenticated = True
-        st.session_state.user = me
-        st.session_state.login_error = None
-
-# =============================
-# شاشة تسجيل الدخول
-# =============================
-if not st.session_state.authenticated:
-    col_left, col_right = st.columns([2, 1])
-    with col_right:
-        st.markdown('<h3 style="font-size:20px;">🔒 تسجيل دخول المشتركين</h3>', unsafe_allow_html=True)
-        st.text_input("اسم المستخدم", key="login_username", placeholder="أدخل اسم المستخدم")
-        st.text_input("كلمة المرور", type="password", key="login_password", placeholder="أدخل كلمة المرور")
-        st.button("دخول", on_click=do_login)
-        if st.session_state.login_error == "bad":
-            st.error("⚠️ اسم المستخدم أو كلمة المرور غير صحيحة.")
-        elif st.session_state.login_error == "expired":
-            st.error("⚠️ انتهى اشتراكك. يرجى التجديد.")
-    with col_left:
-        important_links = load_important_links()
-        st.markdown(
-            "<div style='background-color:#f0f2f6;padding:20px;border-radius:8px;box-shadow:0 2px 5px rgb(0 0 0 / 0.1);line-height:1.6;'>"
-            "<h3 style='font-size:20px;'>فلتر منصة القوة الثلاثية للتداول في الأسواق المالية TriplePower</h3>"
-            + linkify(important_links) + "</div>",
-            unsafe_allow_html=True,
-        )
-    st.stop()
-
-# =============================
-# تحقق دوري من الاشتراك
-# =============================
-if is_expired(st.session_state.user["expiry"]):
-    st.warning("⚠️ انتهى اشتراكك. تم تسجيل خروجك تلقائيًا.")
-    st.session_state.authenticated = False
-    st.session_state.user = None
-    st.rerun()
-
-# =============================
-# بعد تسجيل الدخول
-# =============================
-me = st.session_state.user
 st.markdown("---")
 with st.sidebar:
-    # بطاقة صلاحية الاشتراك
     st.markdown(
-        f"""<div style="
+        """<div style="
             background-color:#28a745;padding:10px;border-radius:5px;color:white;
             font-weight:bold;text-align:center;margin-bottom:10px;">
-            ✅ اشتراكك سارٍ حتى: {me['expiry']}
+            🟢 وضع الضيف: دخول بدون اسم مستخدم أو كلمة سر
             </div>""",
         unsafe_allow_html=True,
     )
-
-    # 🔔 تنبيه انتهاء الاشتراك خلال 3 أيام أو أقل (بحسب توقيت الرياض)
-    try:
-        expiry_dt = datetime.strptime(me["expiry"].strip(), "%Y-%m-%d").date()
-        today_riyadh = datetime.now(ZoneInfo("Asia/Riyadh")).date()
-        days_left = (expiry_dt - today_riyadh).days
-        if 0 <= days_left <= 3:
-            st.warning(f"⚠️ تنبيه: تبقّى {days_left} يومًا على انتهاء الاشتراك. يُرجى التجديد لتجنّب انقطاع الخدمة.")
-    except Exception:
-        pass
+    st.info("⚠️ هذا الوضع مفتوح للجميع. يُوصى بعدم استخدامه للبيانات الحساسة.")
 
     st.markdown("### ⚡ أبرز اختراقات الساعة في السوق الأمريكي")
     sample_symbols = """AAL AAPL ADBE ADI ADP ADSK AEP AKAM ALGN AMAT AMD AMGN AMZN ANSS APA AVGO AYRO BIDU BIIB BKNG BKR BMRN BNTX BYND CAR CDNS CDW CHKP CHRW CHTR CINF CLOV CMCSA CME COO COST CPB CPRT CSCO CSX CTAS CTSH DLTR DPZ DXCM EA EBAY ENPH EQIX ETSY EVRG EXC EXPE FANG FAST FFIV FITB FOX FOXA FSLR FTNT GEN GILD GOOG GOOGL GT HAS HBAN HOLX HON HSIC HST IDXX ILMN INCY INTC INTU IPGP ISRG JBHT JD JKHY KDP KHC KLAC LBTYA LBTYK LILA LILAK LIN LKQ LNT LRCX LULU MAR MAT MCHP MDLZ META MKTX MNST MSFT MU NAVI NDAQ NFLX NTAP NTES NTRS NVAX NVDA NWL NWS NWSA NXPI ODFL ORLY PARA PAYX PCAR PDCO PEP PFG POOL PYPL QCOM QQQ QRVO QVCGA REG REGN ROKU ROP ROST SBAC SBUX SIRI SNPS STX SWKS TCOM TER TMUS TRIP TRMB TROW TSCO TSLA TTD TTWO TXN UAL ULTA URBN VOD VRSK VRSN VRTX VTRS WBA WBD WDC WTW WYNN XEL XRAY XRX ZBRA ZION ZM""".split()
@@ -524,18 +409,33 @@ with st.sidebar:
             )
     except FileNotFoundError:
         st.sidebar.warning("⚠️ الملف غير موجود. الرجاء رفعه بجانب app.py")
-    if st.sidebar.button("تسجيل الخروج"):
-        st.session_state.authenticated = False
-        st.session_state.user = None
-        st.rerun()
+
+# بطاقة أعلى الصفحة وروابط مهمة
+important_links = load_important_links()
+st.markdown(
+    "<div style='background-color:#f0f2f6;padding:20px;border-radius:8px;box-shadow:0 2px 5px rgb(0 0 0 / 0.1);line-height:1.6;'>"
+    "<h3 style='font-size:20px;'>فلتر منصة القوة الثلاثية للتداول في الأسواق المالية TriplePower (Guest Mode)</h3>"
+    + linkify(important_links) + "</div>",
+    unsafe_allow_html=True,
+)
+
+st.markdown("---")
 
 # =============================
 # إدخال الرموز
 # =============================
 symbols_input = st.text_area("أدخل الرموز (مفصولة بمسافة أو سطر)", st.session_state.get("symbols", ""))
-symbols = [s.strip() + suffix for s in symbols_input.replace("\n", " ").split() if s.strip()]
-
-# (ألغينا أي حد أقصى للرموز — سيتم تحليل الكل عبر دفعات)
+# تنظيف الرموز ومنع تكرار اللاحقة
+raw = [s.strip() for s in symbols_input.replace("\n", " ").split() if s.strip()]
+clean = []
+for s in raw:
+    if suffix and s.endswith(suffix):
+        clean.append(s.upper())
+    elif suffix and not s.endswith(suffix) and s.isalpha():
+        clean.append((s + suffix).upper())
+    else:
+        clean.append(s.upper())
+symbols = sorted(set(clean))
 
 # =============================
 # تنفيذ التحليل
@@ -644,6 +544,7 @@ if st.button("🔎 تنفيذ التحليل"):
 
             with st.container():
                 st.subheader(f"أبرز اختراقات ({market_name}) - فاصل {tf_label} ليوم {day_str}")
+                st.caption(f"🧮 تم إيجاد {len(df_results):,} من أصل {len(symbols):,} رمز يحقق الشروط.")
                 html_out = generate_html_table(df_results)
                 st.markdown(html_out, unsafe_allow_html=True)
 
