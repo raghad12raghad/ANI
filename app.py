@@ -495,3 +495,4 @@ if st.button("احسب"):
     if الأخطاء:
         st.info("ملاحظات:")
         for e in الأخطاء: st.write("• ", e)
+ 
