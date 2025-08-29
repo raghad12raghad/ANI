@@ -2,14 +2,12 @@
 """
 📊 Buffett Principles — Streamlit (ملف واحد بسيط)
 - نسب أساسية مستوحاة من مبادئ وارن بافيت
-- تحليل نصي موجز
+- تحليل نصي + أسباب قائمة التحقق لكل بند
 تشغيل: streamlit run app.py
 """
 
 import re
 from html import escape
-from datetime import datetime
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -99,6 +97,9 @@ def to_num(x, digits=2):
     if ax >= 1_000:             return f"{x/1_000:.{digits}f}K"
     return f"{x:.{digits}f}"
 
+def status_word(sym):
+    return "متوافق" if sym == "✅" else ("مقبول" if sym == "⚠️" else "غير متوافق")
+
 # مرادفات شائعة لأسماء البنود (Yahoo)
 REV_KEYS = ["Total Revenue","Revenue","TotalRevenue","Sales"]
 COGS_KEYS = ["Cost Of Revenue","Cost of Revenue","CostOfRevenue","COGS"]
@@ -146,7 +147,6 @@ def load_company_data(ticker: str):
     cf_a  = get_df(lambda: t.cashflow)
     cf_q  = get_df(lambda: t.quarterly_cashflow)
 
-    # لا نُرجع كائن Ticker؛ فقط أرقام قابلة للتسلسل
     price = np.nan
     shares = np.nan
     market_cap = np.nan
@@ -281,63 +281,133 @@ def compute_buffett_ratios(data: dict, mode: str):
     }
 
 # =============================
-# Score بسيط (مجموع 100)
+# Score + أسباب مفصلة (مجموع 100)
 # =============================
 def buffett_scorecard(r):
     score = 0
     flags = {}
+    reasons = []
 
-    def tag(name, ok, mid=False):
-        flags[name] = "✅" if ok else ("⚠️" if mid else "❌")
+    def set_flag(name, ok, mid=False):
+        sym = "✅" if ok else ("⚠️" if mid else "❌")
+        flags[name] = sym
+        return sym
 
-    # ROIC
-    roic = r["ROIC"]; ok = (not pd.isna(roic) and roic >= 0.15)
-    score += 20 if ok else (8 if (not pd.isna(roic) and roic >= 0.10) else 0)
-    tag("ROIC ≥15%", ok, mid=(not pd.isna(roic) and roic >= 0.10))
+    # 1) ROIC ≥ 15%
+    roic = r["ROIC"]
+    ok = (not pd.isna(roic) and roic >= 0.15)
+    mid = (not pd.isna(roic) and 0.10 <= roic < 0.15)
+    sym = set_flag("ROIC ≥15%", ok, mid=mid)
+    score += 20 if ok else (8 if mid else 0)
+    if pd.isna(roic):
+        reason = "ROIC غير متوفر لقصور البيانات."
+    else:
+        thr = "≥ 15%" if ok else ("بين 10% و15%" if mid else "< 10%")
+        reason = f"ROIC = {to_percent(roic)}، والحد {thr}."
+    reasons.append({"البند": "ROIC ≥15%", "الحالة": status_word(sym), "السبب": reason})
 
-    # هوامش
-    gm = r["GrossMargin"]; ok = (not pd.isna(gm) and gm >= 0.25)
-    score += 10 if ok else (5 if (not pd.isna(gm) and gm >= 0.18) else 0)
-    tag("هامش إجمالي قوي", ok, mid=(not pd.isna(gm) and gm >= 0.18))
+    # 2) هامش إجمالي قوي (≥ 25%)
+    gm = r["GrossMargin"]
+    ok = (not pd.isna(gm) and gm >= 0.25)
+    mid = (not pd.isna(gm) and 0.18 <= gm < 0.25)
+    sym = set_flag("هامش إجمالي قوي", ok, mid=mid)
+    score += 10 if ok else (5 if mid else 0)
+    if pd.isna(gm):
+        reason = "الهامش الإجمالي غير متوفر."
+    else:
+        thr = "≥ 25%" if ok else ("بين 18% و25%" if mid else "< 18%")
+        reason = f"الهامش الإجمالي = {to_percent(gm)}، والحد {thr}."
+    reasons.append({"البند": "هامش إجمالي قوي", "الحالة": status_word(sym), "السبب": reason})
 
-    # جودة الأرباح
-    q = r["OCF/NI"]; ok = (not pd.isna(q) and q >= 1.0)
-    score += 10 if ok else (5 if (not pd.isna(q) and q >= 0.8) else 0)
-    tag("جودة الأرباح OCF/NI", ok, mid=(not pd.isna(q) and q >= 0.8))
+    # 3) جودة الأرباح OCF/NI ≥ 1
+    q = r["OCF/NI"]
+    ok = (not pd.isna(q) and q >= 1.0)
+    mid = (not pd.isna(q) and 0.8 <= q < 1.0)
+    sym = set_flag("جودة الأرباح OCF/NI", ok, mid=mid)
+    score += 10 if ok else (5 if mid else 0)
+    if pd.isna(q):
+        reason = "نسبة OCF/NI غير متوفرة."
+    else:
+        thr = "≥ 1.0x" if ok else ("بين 0.8x و1.0x" if mid else "< 0.8x")
+        reason = f"OCF/NI = {to_ratio(q)}، والحد {thr}."
+    reasons.append({"البند": "جودة الأرباح OCF/NI", "الحالة": status_word(sym), "السبب": reason})
 
-    # هامش التدفق الحر
-    f = r["FCF_Margin"]; ok = (not pd.isna(f) and f >= 0.08)
-    score += 10 if ok else (5 if (not pd.isna(f) and f >= 0.05) else 0)
-    tag("هامش التدفق الحر", ok, mid=(not pd.isna(f) and f >= 0.05))
+    # 4) هامش التدفق الحر (أرباح المالك/الإيراد) ≥ 8%
+    f = r["FCF_Margin"]
+    ok = (not pd.isna(f) and f >= 0.08)
+    mid = (not pd.isna(f) and 0.05 <= f < 0.08)
+    sym = set_flag("هامش التدفق الحر", ok, mid=mid)
+    score += 10 if ok else (5 if mid else 0)
+    if pd.isna(f):
+        reason = "هامش أرباح المالك غير متوفر."
+    else:
+        thr = "≥ 8%" if ok else ("بين 5% و8%" if mid else "< 5%")
+        reason = f"هامش أرباح المالك = {to_percent(f)}، والحد {thr}."
+    reasons.append({"البند": "هامش التدفق الحر", "الحالة": status_word(sym), "السبب": reason})
 
-    # صافي الدين متحفظ
+    # 5) هيكل دين متحفظ: صافي الدين ≤ 0 أو Debt/OE ≤ 2
     td, cash = r["TotalDebt"], r["Cash"]
-    net_debt = np.nan if pd.isna(td) else td - (0 if pd.isna(cash) else cash)
     oe = r["OwnerEarnings"]
-    crit = (not pd.isna(net_debt) and net_debt <= 0) or (not any(pd.isna(x) for x in [td, oe]) and oe > 0 and td/oe <= 2.0)
-    mid  = (not any(pd.isna(x) for x in [td, oe]) and oe > 0 and td/oe <= 3.0)
+    net_debt = np.nan if pd.isna(td) else td - (0 if pd.isna(cash) else cash)
+    ratio_debt_oe = (td / oe) if (not any(pd.isna(x) for x in [td, oe]) and oe > 0) else np.nan
+    crit = (not pd.isna(net_debt) and net_debt <= 0) or (not pd.isna(ratio_debt_oe) and ratio_debt_oe <= 2.0)
+    mid  = (not pd.isna(ratio_debt_oe) and ratio_debt_oe <= 3.0)
+    sym = set_flag("هيكل دين متحفظ", crit, mid=mid)
     score += 10 if crit else (5 if mid else 0)
-    tag("هيكل دين متحفظ", crit, mid=mid)
+    if pd.isna(td) and pd.isna(cash):
+        reason = "بيانات الدين/النقد غير متوفرة."
+    else:
+        nd_txt = f"صافي الدين = {to_num(net_debt)}"
+        if not pd.isna(ratio_debt_oe):
+            nd_txt += f"، ونسبة الدين/أرباح المالك = {to_ratio(ratio_debt_oe)}"
+        thr = "≤ 0 أو ≤ 2.0x" if crit else ("≤ 3.0x (مقبول)" if mid else "> 3.0x أو بيانات ناقصة")
+        reason = f"{nd_txt}. الحد {thr}."
+    reasons.append({"البند": "هيكل دين متحفظ", "الحالة": status_word(sym), "السبب": reason})
 
-    # تغطية الفوائد
-    ic = r["InterestCoverage"]; ok = (not pd.isna(ic) and ic >= 10.0)
-    score += 10 if ok else (5 if (not pd.isna(ic) and ic >= 6.0) else 0)
-    tag("تغطية الفوائد", ok, mid=(not pd.isna(ic) and ic >= 6.0))
+    # 6) تغطية الفوائد ≥ 10x
+    ic = r["InterestCoverage"]
+    ok = (not pd.isna(ic) and ic >= 10.0)
+    mid = (not pd.isna(ic) and 6.0 <= ic < 10.0)
+    sym = set_flag("تغطية الفوائد", ok, mid=mid)
+    score += 10 if ok else (5 if mid else 0)
+    if pd.isna(ic):
+        reason = "تغطية الفوائد غير متوفرة."
+    else:
+        thr = "≥ 10x" if ok else ("بين 6x و10x" if mid else "< 6x")
+        reason = f"تغطية الفوائد = {to_ratio(ic)}، والحد {thr}."
+    reasons.append({"البند": "تغطية الفوائد", "الحالة": status_word(sym), "السبب": reason})
 
-    # CCC
-    ccc = r["CCC"]; ok = (not pd.isna(ccc) and ccc <= 0)
-    score += 5 if ok else (2 if (not pd.isna(ccc) and ccc <= 30) else 0)
-    tag("دورة التحويل النقدي", ok, mid=(not pd.isna(ccc) and ccc <= 30))
+    # 7) دورة التحويل النقدي ≤ 0 يوم (أو ≤ 30 يوم مقبول)
+    ccc = r["CCC"]
+    ok = (not pd.isna(ccc) and ccc <= 0)
+    mid = (not pd.isna(ccc) and ccc <= 30)
+    sym = set_flag("دورة التحويل النقدي", ok, mid=mid)
+    score += 5 if ok else (2 if mid else 0)
+    if pd.isna(ccc):
+        reason = "CCC غير متوفرة."
+    else:
+        thr = "≤ 0 يوم" if ok else ("≤ 30 يوم (مقبول)" if mid else "> 30 يوم")
+        reason = f"CCC = {to_days(ccc)}، والحد {thr}."
+    reasons.append({"البند": "دورة التحويل النقدي", "الحالة": status_word(sym), "السبب": reason})
 
-    # تقييم
+    # 8) تقييم معقول: OE Yield ≥ 6% أو P/OE ≤ 20
     oey, pto = r["OwnerEarningsYield"], r["P/OwnerEarnings"]
     ok = (not pd.isna(oey) and oey >= 0.06) or (not pd.isna(pto) and pto <= 20)
     mid = (not pd.isna(oey) and oey >= 0.04) or (not pd.isna(pto) and pto <= 25)
+    sym = set_flag("تقييم معقول (OE Yield / P-to-OE)", ok, mid=mid)
     score += 10 if ok else (5 if mid else 0)
-    tag("تقييم معقول (OE Yield / P-to-OE)", ok, mid=mid)
+    if pd.isna(oey) and pd.isna(pto):
+        reason = "بيانات التقييم (أرباح المالك/القيمة السوقية) غير متوفرة."
+    else:
+        cond = []
+        if not pd.isna(oey): cond.append(f"OE Yield = {to_percent(oey)}")
+        if not pd.isna(pto): cond.append(f"P/OE = {to_ratio(pto)}")
+        thr = "≥ 6% أو ≤ 20x" if ok else ("≥ 4% أو ≤ 25x (مقبول)" if mid else "< 4% و > 25x")
+        reason = f"{'، '.join(cond)}. الحد {thr}."
+    reasons.append({"البند": "تقييم معقول (OE Yield / P-to-OE)", "الحالة": status_word(sym), "السبب": reason})
 
     verdict = "✅ جذّابة مع هامش أمان" if score >= 75 else ("🟧 جيدة لكن انتظر سعرًا أفضل" if score >= 55 else "🕒 راقِب")
-    return float(score), flags, verdict, net_debt
+    return float(score), flags, verdict, net_debt, reasons
 
 # =============================
 # نص تحليلي موجز
@@ -356,7 +426,7 @@ def narrative(symbol, r, score, verdict):
 # واجهة المستخدم
 # =============================
 st.title("📊 التحليل الأساسي بمبادئ بافيت")
-st.caption("حساب نسب أساسية مستلهمة من منهج بافيت ثم تحليل نصي موجز (TTM أو سنوي).")
+st.caption("حساب نسب أساسية مستلهمة من نهج بافيت + قائمة تحقق مع أسباب تفصيلية لكل بند.")
 
 with st.sidebar:
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
@@ -372,7 +442,6 @@ with st.sidebar:
 symbols_input = st.text_area("أدخل الرموز (مسافة/سطر). عند اختيار السوق السعودي سأضيف .SR تلقائياً.", 
                              st.session_state.get("syms",""))
 
-# تجهيز الرموز
 raw = [s.strip().upper() for s in symbols_input.replace("\n"," ").split() if s.strip()]
 symbols = []
 for s in raw:
@@ -388,15 +457,16 @@ if st.button("🚀 تنفيذ التحليل"):
         st.stop()
 
     rows, score_rows, texts, notes = [], [], [], []
+    reasons_map = {}  # لكل رمز: قائمة أسباب مفصلة
     prog = st.progress(0.0, text="بدء التحليل...")
 
     for i, sym in enumerate(symbols, start=1):
         try:
             data = load_company_data(sym)
             ratios = compute_buffett_ratios(data, mode)
-            score, flags, verdict, net_debt = buffett_scorecard(ratios)
+            score, flags, verdict, net_debt, reasons = buffett_scorecard(ratios)
 
-            # صف الجدول
+            # جدول النِّسَب
             rows.append({
                 "الرمز": sym,
                 "الهامش الإجمالي": to_percent(ratios["GrossMargin"]),
@@ -418,6 +488,9 @@ if st.button("🚀 تنفيذ التحليل"):
             sr = {"الرمز": sym, "الدرجة": f"{score:.0f}/100", **flags, "التوصية": verdict}
             score_rows.append(sr)
 
+            # أسباب مفصلة
+            reasons_map[sym] = pd.DataFrame(reasons)
+
             # نص تحليلي
             texts.append(narrative(sym, ratios, score, verdict))
 
@@ -436,7 +509,6 @@ if st.button("🚀 تنفيذ التحليل"):
     if score_rows:
         st.subheader("✅ قائمة تحقق بافيت (Scoring)")
         dfb = pd.DataFrame(score_rows)
-        # جدول HTML بسيط للتلوين
         def html_table(df):
             html = "<table class='buffett-table'><thead><tr>"
             for c in df.columns: html += f"<th>{escape(str(c))}</th>"
@@ -452,6 +524,14 @@ if st.button("🚀 تنفيذ التحليل"):
         st.markdown(html_table(dfb), unsafe_allow_html=True)
         st.download_button("📥 تنزيل Buffett Score CSV", dfb.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"buffett_score_{mode}.csv", mime="text/csv")
+
+    if reasons_map:
+        st.subheader("📝 أسباب قائمة تحقق بافيت")
+        for sym, df_r in reasons_map.items():
+            with st.expander(f"أسباب التقييم — {sym}"):
+                st.dataframe(df_r, use_container_width=True)
+                st.download_button(f"تنزيل الأسباب ({sym}) CSV", df_r.to_csv(index=False).encode("utf-8-sig"),
+                                   file_name=f"buffett_reasons_{sym}_{mode}.csv", mime="text/csv")
 
     if texts:
         st.subheader("🧠 التحليل النصي (مستلهَم من مبادئ بافيت)")
