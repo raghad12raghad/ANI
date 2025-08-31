@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report + Excel VBA Export)
-ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل + مُصدِّر كود VBA لملء Excel.
+📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report + Excel VBA Cost Model)
+ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل (عرض داخل التطبيق) + مُصدِّر كود Excel VBA (RunCostModel).
 تشغيل: streamlit run app.py
 اعتماديات: streamlit, yfinance, pandas, numpy
 """
@@ -36,6 +36,15 @@ THEME_CSS = """
   .kpi .value { font-size:20px; font-weight:700; }
   .kpi .sub { color:#64748b; font-size:12px; margin-top:4px; }
   .kpi.ok .value { color:#059669; } .kpi.mid .value{ color:#d97706; } .kpi.bad .value{ color:#dc2626; }
+
+  .buffett-table {border-collapse: collapse; width: 100%; direction: rtl; font-family: Arial, sans-serif;}
+  .buffett-table th, .buffett-table td {border: 1px solid #e5e7eb; padding: 8px; text-align: center;}
+  .buffett-table th {background-color: #0ea5e9; color: white;}
+  .buffett-table tr:nth-child(even){background-color: #f8fafc;}
+  .buffett-table tr:hover {background-color: #eef2ff;}
+  .buffett-table td.green { color: #059669; font-weight: bold; }
+  .buffett-table td.yellow { color: #d97706; font-weight: bold; }
+  .buffett-table td.red { color: #dc2626; font-weight: bold; }
 </style>
 """
 st.markdown(THEME_CSS, unsafe_allow_html=True)
@@ -125,6 +134,7 @@ def kpi_card(title, value_str, sub=None, status="ok"):
     """
 
 def md_table(headers, rows):
+    """يبني جدول Markdown بسيط."""
     line1 = "| " + " | ".join(headers) + " |"
     line2 = "| " + " | ".join(["---"]*len(headers)) + " |"
     lines = [line1, line2]
@@ -135,6 +145,7 @@ def md_table(headers, rows):
 # مفاتيح Yahoo
 REV_KEYS = ["Total Revenue","Revenue","TotalRevenue","Sales"]
 COGS_KEYS = ["Cost Of Revenue","Cost of Revenue","CostOfRevenue","COGS"]
+GP_KEYS   = ["Gross Profit","GrossProfit"]
 OPINC_KEYS= ["Operating Income","OperatingIncome","EBIT"]
 EBIT_KEYS = ["EBIT","Operating Income","OperatingIncome"]
 NI_KEYS   = ["Net Income","NetIncome","Net Income Common Stockholders","Net Income Applicable To Common Shares"]
@@ -298,6 +309,7 @@ def compute_core_metrics(data: dict, mode: str):
     # السيولة/الملاءة
     current_ratio = safe_div(ca, cl)
     quick_ratio   = safe_div((ca - (inv if not pd.isna(inv) else 0)), cl)
+    debt_to_equity = safe_div(total_debt, te)
     roa = safe_div(ni, ta)
     roe = safe_div(ni, te)
 
@@ -367,7 +379,7 @@ def buffett_scorecard(r):
     score = 0
     flags = {}
     reasons = []
-    components = []
+    components = []  # تفصيل النقاط
 
     def set_flag(name, ok, mid=False, points_ok=10, points_mid=5, points_bad=0, explain=""):
         nonlocal score
@@ -434,7 +446,7 @@ def buffett_scorecard(r):
     return float(score), flags, verdict, (np.nan if pd.isna(td) else net_debt), reasons, components
 
 # =============================
-# اتجاهات تاريخية (مبسّطة)
+# اتجاهات تاريخية (مبسّطة للرسوم)
 # =============================
 def historical_trends(inc_a: pd.DataFrame, cf_a: pd.DataFrame, years: int = 5):
     def take_series(df, keys):
@@ -472,7 +484,7 @@ def simple_dcf(oe_base, discount_rate=0.12, growth_rate=0.05, years=5, terminal_
     return total_pv, pd.DataFrame(flows)
 
 # =============================
-# نصوص مساعدة للتقرير (Markdown)
+# نصوص مساعدة للتقرير
 # =============================
 def executive_summary(sym, info, r, score, verdict, dcf_value_ps, price):
     sector = info.get("sector") or "—"; industry = info.get("industry") or "—"
@@ -589,7 +601,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
 
     dcf_rows = dcf_table.to_dict("records") if isinstance(dcf_table, pd.DataFrame) and not dcf_table.empty else []
     dcf_md = md_table(["السنة","التدفق المتوقع","القيمة الحالية"],
-                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات."
+                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات (تحقق من المدخلات)."
 
     sens_tbl = md_table(
         ["السيناريو","القيمة الجوهرية/سهم"],
@@ -632,15 +644,15 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
 - تم الاعتماد على Yahoo Finance عبر yfinance وقد تختلف تسمية البنود بين الشركات.
 - **TTM** = مجموع آخر 4 أرباع لقائمة الدخل/التدفق النقدي، وأحدث ميزانية متاحة.
 - **ROIC (تقريبي)** = NOPAT / (الدين + حقوق – النقد) حيث NOPAT ≈ EBIT×(1–الضريبة).
-- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط).
-- حدود بافيت المستخدمَة عامة؛ قد تُعدّل حسب القطاع.
+- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط لا يفرّق Capex الصيانة/النمو).
+- حدود بافيت المستخدمَة عامة؛ قد تُعدّل حسب القطاع وطبيعة الأعمال.
 
 **مسرد مختصر:**
 - **OCF**: التدفق النقدي التشغيلي.
 - **Capex**: الإنفاق الرأسمالي.
 - **OE**: أرباح المالك = OCF – Capex.
 - **CCC**: دورة التحويل النقدي = DSO + DIO – DPO (أقل أفضل).
-- **OE Yield**: OE / القيمة السوقية.
+- **OE Yield**: OE / القيمة السوقية (كلما أعلى كان أفضل).
 """
 
     sections = []
@@ -661,7 +673,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         buffett_tbl,
         "",
         "## 7) التقييم بطريقة التدفقات المخصومة (DCF)",
-        f"- **السعر الحالي:** {to_num(r['Price'])} | **القيمة الجوهرية/سهم (أساسي):** {to_num(dcf_ps)}",
+        f"- **السعر الحالي:** {to_num(price)} | **القيمة الجوهرية/سهم (أساسي):** {to_num(dcf_ps)}",
         "", "### جدول التدفقات والقيمة الحالية", dcf_md,
         "", "### حساسية مبسّطة", sens_tbl,
         "",
@@ -682,134 +694,366 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
-# مُصدِّر Excel VBA Module
+# مُولِّد كود Excel VBA (RunCostModel)
 # =============================
-def vba_literal(s: str) -> str:
-    if s is None:
-        return ""
-    return str(s).replace('"', '""')
+def build_costmodel_vba_module() -> str:
+    return """Option Explicit
 
-def kv_line(key, value) -> str:
-    return f'    arr(i, 1) = "{vba_literal(key)}": arr(i, 2) = "{vba_literal(value)}": i = i + 1'
+' =========================
+' Main procedure
+' =========================
+Sub RunCostModel()
+    Dim wsMain As Worksheet, wsPurchases As Worksheet, wsSales As Worksheet
+    Dim wsInventory As Worksheet, wsEquipment As Worksheet, wsReport As Worksheet
+    Dim lastRow As Long, i As Long
+    Dim rowOffset As Long
+    Const LAST_DATA_ROW As Long = 50
+    Const FIXED_COST_START_ROW As Long = 53
 
-def build_vba_module(sym: str, info: dict, r: dict, score: float, verdict: str,
-                     report_md: str, dcf_ps: float, best_ps: float, worst_ps: float,
-                     reasons: list, comps_rows: list) -> str:
-    fields = [
-        ("Symbol", sym),
-        ("Company", info.get("longName") or sym),
-        ("Sector", info.get("sector") or "—"),
-        ("Industry", info.get("industry") or "—"),
-        ("Currency", info.get("financialCurrency") or info.get("currency") or "—"),
-        ("Price", to_num(r.get("Price"))),
-        ("MarketCap", to_num(r.get("MarketCap"))),
-        ("Revenue", to_num(r.get("Revenue"))),
-        ("GrossProfit", to_num(r.get("GrossProfit"))),
-        ("EBIT", to_num(r.get("EBIT"))),
-        ("NetIncome", to_num(r.get("NetIncome"))),
-        ("GrossMargin", to_percent(r.get("GrossMargin"))),
-        ("OperatingMargin", to_percent(r.get("OperatingMargin"))),
-        ("NetMargin", to_percent(r.get("NetMargin"))),
-        ("ROA", to_percent(r.get("ROA"))),
-        ("ROE", to_percent(r.get("ROE"))),
-        ("ROIC", to_percent(r.get("ROIC"))),
-        ("CurrentRatio", to_ratio(r.get("CurrentRatio"))),
-        ("QuickRatio", to_ratio(r.get("QuickRatio"))),
-        ("DebtToEquity", to_ratio(safe_div(r.get("TotalDebt"), r.get("TotalEquity")))),
-        ("InterestCoverage", to_ratio(r.get("InterestCoverage"))),
-        ("CCC", to_days(r.get("CCC"))),
-        ("OE", to_num(r.get("OwnerEarnings"))),
-        ("OE_Yield", to_percent(r.get("OwnerEarningsYield"))),
-        ("P_to_OE", "—" if pd.isna(r.get("P/OwnerEarnings")) else f"{r.get('P/OwnerEarnings'):.2f}x"),
-        ("BVPS", to_num(r.get("BVPS"))),
-        ("PE", "—" if pd.isna(r.get("PE")) else f"{r.get('PE'):.2f}x"),
-        ("PB", "—" if pd.isna(r.get("PB")) else f"{r.get('PB'):.2f}x"),
-        ("BuffettScore", f"{score:.0f}/100"),
-        ("Verdict", verdict),
-        ("DCF_FairValue_perShare", to_num(dcf_ps)),
-        ("Sensitivity_Best", to_num(best_ps)),
-        ("Sensitivity_Worst", to_num(worst_ps)),
-    ]
+    On Error GoTo ErrorHandler
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
 
-    reasons_text = "\n".join([f"- {x.get('البند')}: {x.get('الحالة')} — {x.get('السبب')}" for x in reasons]) or "—"
-    comps_text = ""
-    if comps_rows:
-        comps_text = "الرمز\tP/E\tP/B\tROE\tROIC\tهامش صافي\n" + "\n".join(
-            [f"{c.get('الرمز','')}\t{c.get('P/E','')}\t{c.get('P/B','')}\t{c.get('ROE','')}\t{c.get('ROIC','')}\t{c.get('هامش صافي','')}" for c in comps_rows]
-        )
+    ' Initialize Main Cost Sheet
+    Set wsMain = CreateOrClearSheet("Main Cost Sheet")
 
-    lines = []
-    lines.append('Attribute VB_Name = "BuffettReportModule"')
-    lines.append("Option Explicit")
-    lines.append("")
-    lines.append("Public Sub PopulateBuffettReport()")
-    lines.append('    On Error GoTo EH')
-    lines.append('    Dim ws As Worksheet, i As Long')
-    lines.append('    Application.ScreenUpdating = False')
-    lines.append('    Application.DisplayAlerts = False')
-    lines.append('    ')
-    lines.append('    Dim nm As String: nm = "BuffettReport"')
-    lines.append('    Dim exists As Boolean: exists = False')
-    lines.append('    Dim sh As Worksheet')
-    lines.append('    For Each sh In ThisWorkbook.Worksheets')
-    lines.append('        If sh.Name = nm Then exists = True: Exit For')
-    lines.append('    Next sh')
-    lines.append('    If exists Then ThisWorkbook.Worksheets(nm).Delete')
-    lines.append('    Set ws = ThisWorkbook.Worksheets.Add')
-    lines.append('    ws.Name = nm')
-    lines.append('    ')
-    lines.append('    ReDim arr(1 To ' + str(len(fields)) + ', 1 To 2)')
-    lines.append('    i = 1')
-    for k, v in fields:
-        lines.append(kv_line(k, v))
-    lines.append('    With ws')
-    lines.append('        .Range("A1").Value = "Field"')
-    lines.append('        .Range("B1").Value = "Value"')
-    lines.append('        .Range("A1:B1").Font.Bold = True')
-    lines.append('        .Range("A2").Resize(UBound(arr,1), UBound(arr,2)).Value = arr')
-    lines.append('        .Columns("A:B").EntireColumn.AutoFit')
-    lines.append('    End With')
-    lines.append('    ')
-    lines.append('    Dim startRow As Long: startRow = 2 + UBound(arr,1) + 2')
-    lines.append('    ws.Cells(startRow, 1).Value = "Executive Summary (AR)"')
-    lines.append('    ws.Cells(startRow, 1).Font.Bold = True')
-    es = executive_summary(sym, info, r, score, verdict, dcf_ps, r.get("Price"))
-    lines.append(f'    ws.Cells(startRow + 1, 1).Value = "{vba_literal(es)}"')
-    lines.append('    ws.Cells(startRow + 1, 1).WrapText = True')
-    lines.append('    ws.Columns("A").ColumnWidth = 90')
-    lines.append('    ')
-    lines.append('    Dim rs As Long: rs = startRow + 3')
-    lines.append('    ws.Cells(rs, 1).Value = "Reasons / Checks"')
-    lines.append('    ws.Cells(rs, 1).Font.Bold = True')
-    lines.append(f'    ws.Cells(rs + 1, 1).Value = "{vba_literal(reasons_text)}"')
-    lines.append('    ws.Cells(rs + 1, 1).WrapText = True')
-    if comps_text:
-        lines.append('    Dim cr As Long: cr = rs + 3')
-        lines.append('    ws.Cells(cr, 1).Value = "Peers (Simple Table)"')
-        lines.append('    ws.Cells(cr, 1).Font.Bold = True')
-        lines.append(f'    ws.Cells(cr + 1, 1).Value = "{vba_literal(comps_text)}"')
-        lines.append('    ws.Cells(cr + 1, 1).WrapText = True')
-    lines.append('    Dim mr As Long: mr = ws.UsedRange.Rows.Count + 2')
-    lines.append('    ws.Cells(mr, 1).Value = "Full Markdown (for reference)"')
-    lines.append('    ws.Cells(mr, 1).Font.Bold = True')
-    lines.append(f'    ws.Cells(mr + 1, 1).Value = "{vba_literal(report_md)}"')
-    lines.append('    ws.Cells(mr + 1, 1).WrapText = True')
-    lines.append('    ')
-    lines.append('    Application.DisplayAlerts = True')
-    lines.append('    Application.ScreenUpdating = True')
-    lines.append('    MsgBox "Buffett report populated successfully.", vbInformation')
-    lines.append('    Exit Sub')
-    lines.append('EH:')
-    lines.append('    Application.DisplayAlerts = True')
-    lines.append('    Application.ScreenUpdating = True')
-    lines.append('    MsgBox "Error: " & Err.Description, vbCritical')
-    lines.append("End Sub")
-    return "\n".join(lines)
+    ' Headers
+    With wsMain
+        .Cells(1, 1).Resize(1, 10).Value = Array( _
+            "Product", "Supplier", "Fixed Cost (SAR)", _
+            "Variable Cost per Unit (SAR)", "Selling Price per Unit (SAR)", "Quantity Sold", _
+            "Total Variable Cost (SAR)", "Total Revenue (SAR)", "Net Profit (SAR)", "Profit Margin (%)")
+        With .Range("A1:J1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(0, 112, 192)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+    End With
+
+    ' Split product data into smaller arrays
+    Dim products1 As Variant, products2 As Variant, products3 As Variant
+    products1 = Array( _
+        Array("Freeze-Dried Mixed Fruits (Available on Demand)", "", 0, 0, 20, 395), _
+        Array("Freeze-Dried Strawberries (Available on Demand)", "", 0, 0, 20, 300), _
+        Array("Freeze-Dried Local Figs (Available on Demand)", "", 0, 0, 20, 125), _
+        Array("Freeze-Dried Ice Cream (Available on Demand)", "", 0, 0, 20, 248), _
+        Array("Freeze-Dried Toffee Candy 5 Pieces (Available on Demand)", "", 0, 0, 15, 98), _
+        Array("Freeze-Dried Snickers Biscuits 5 Pieces (Available on Demand)", "", 0, 0, 15, 216), _
+        Array("Freeze-Dried Skittles Candy (Available on Demand)", "", 0, 0, 15, 112), _
+        Array("Freeze-Dried Lollipop Candy 4 Pieces (Available on Demand)", "", 0, 0, 15, 190), _
+        Array("Freeze-Dried Marshmallow Candy 10 Pieces (Available on Demand)", "", 0, 0, 12, 159), _
+        Array("Freeze-Dried Sour Skittles Candy (Available on Demand)", "", 0, 0, 15, 166), _
+        Array("Freeze-Dried Peach (Available on Demand)", "", 0, 0, 20, 51), _
+        Array("Freeze-Dried Apricot (Available on Demand)", "", 0, 0, 20, 26), _
+        Array("Freeze-Dried Mango (Available on Demand)", "", 0, 0, 20, 352), _
+        Array("Freeze-Dried Rainbow Trolli Jelly 8 Pieces (Available on Demand)", "", 0, 0, 15, 82) _
+    )
+    products2 = Array( _
+        Array("Freeze-Dried Orange (Available on Demand)", "", 0, 0, 20, 55), _
+        Array("Freeze-Dried Banana (Available on Demand)", "", 0, 0, 20, 42), _
+        Array("Freeze-Dried Kiwi (Available on Demand)", "", 0, 0, 20, 50), _
+        Array("Freeze-Dried Twix Biscuits 5 Pieces (Available on Demand)", "", 0, 0, 15, 68), _
+        Array("Freeze-Dried Lemon (Available on Demand)", "", 0, 0, 20, 37), _
+        Array("Freeze-Dried Cola Lollipop Candy 4 Pieces", "", 0, 0, 15, 62), _
+        Array("Freeze-Dried Kiis Trolli Jelly", "", 0, 0, 15, 24), _
+        Array("Freeze-Dried Peach Jelly", "", 0, 0, 15, 29), _
+        Array("Freeze-Dried Marshmallow Sticks 5 Pieces", "", 0, 0, 12, 27), _
+        Array("Freeze-Dried Local Basil", "", 0, 0, 10, 7), _
+        Array("Freeze-Dried Sour Worm Jelly", "", 0, 0, 15, 22), _
+        Array("Freeze-Dried Marshmallow Puffs 4 Pieces", "", 0, 0, 13, 20), _
+        Array("Berry and Blackberry Puff Pastry, Delicious and Soft 36g", "", 0, 0, 2.5, 6), _
+        Array("Super Hyper Sour Blueberry Gum 21g - 1 Piece", "", 0, 0, 1.95, 1) _
+    )
+    products3 = Array( _
+        Array("Super Hyper Sour Cherry Gum 21g - 1 Piece", "", 0, 0, 1.95, 6), _
+        Array("Sour Fruit Powder Candy 48g (16x3g)", "", 0, 0, 0.75, 5), _
+        Array("Fruit Roll-Up Strawberry Trend Exclusive (Per Piece)", "", 0, 0, 2.5, 2), _
+        Array("Toffex Stick Candy (3 Mixed Fruit Flavors)", "", 0, 0, 1.5, 6), _
+        Array("Takis New Flavor, Hot and Crunchy Blue Tortilla Chips 56g", "", 0, 0, 5.99, 15), _
+        Array("Sour Zombie Powder Candy with Lollipop", "", 0, 0, 2.5, 6), _
+        Array("Artificial Fruit Candy (3 Flavors: Blueberry, Strawberry, Orange)", "", 0, 0, 3, 4), _
+        Array("Three-Flavor Artificial Fruit Candy", "", 0, 0, 2, 2), _
+        Array("Freeze-Dried Toffex Candy 45g", "", 0, 0, 15, 10), _
+        Array("Freeze-Dried Blackberries 35g", "", 0, 0, 20, 2), _
+        Array("Freeze-Dried Safari 5 Pieces", "", 0, 0, 10, 1), _
+        Array("Freeze-Dried Fruit Roll-Ups with Marshmallow Mix", "", 0, 0, 15, 6), _
+        Array("Freeze-Dried Fairy Berry Lollipop Pastry 4 Pieces (Available on Demand)", "", 0, 0, 15, 4), _
+        Array("Freeze-Dried Fairy Berry Lollipop Pastry 4 Pieces (Available on Demand)", "", 0, 0, 15, 5) _
+    )
+
+    ' Write product data
+    rowOffset = 2
+    For i = LBound(products1) To UBound(products1)
+        wsMain.Cells(i + rowOffset, 1).Resize(1, 6).Value = products1(i)
+    Next i
+
+    rowOffset = rowOffset + UBound(products1) + 1
+    For i = LBound(products2) To UBound(products2)
+        wsMain.Cells(i + rowOffset, 1).Resize(1, 6).Value = products2(i)
+    Next i
+
+    rowOffset = rowOffset + UBound(products2) + 1  ' fix
+    For i = LBound(products3) To UBound(products3)
+        wsMain.Cells(i + rowOffset, 1).Resize(1, 6).Value = products3(i)
+    Next i
+
+    ' Additional empty rows
+    For i = LAST_DATA_ROW + 1 To LAST_DATA_ROW + 7
+        wsMain.Cells(i, 1).Value = "Additional Product " & (i - LAST_DATA_ROW)
+        With wsMain.Range(wsMain.Cells(i, 1), wsMain.Cells(i, 10))
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+    Next i
+
+    ' Total row
+    lastRow = LAST_DATA_ROW + 8
+    With wsMain.Cells(lastRow, 1)
+        .Value = "Total"
+        With .Resize(1, 10)
+            .Font.Bold = True
+            .Interior.Color = RGB(211, 211, 211)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+    End With
+
+    ' Row calculations
+    For i = 2 To lastRow - 1
+        With wsMain
+            .Cells(i, 7).Formula = "=IFERROR(D" & i & "*F" & i & ",0)"
+            .Cells(i, 8).Formula = "=IFERROR(E" & i & "*F" & i & ",0)"
+            .Cells(i, 9).Formula = "=IFERROR(H" & i & "-(C" & i & "+G" & i & "),0)"
+            .Cells(i, 10).Formula = "=IFERROR((I" & i & "/H" & i & ")*100,0)"
+        End With
+    Next i
+
+    ' Column totals
+    With wsMain
+        .Cells(lastRow, 3).Formula = "=SUM(C2:C" & (lastRow - 1) & ")"
+        .Cells(lastRow, 7).Formula = "=SUM(G2:G" & (lastRow - 1) & ")"
+        .Cells(lastRow, 8).Formula = "=SUM(H2:H" & (lastRow - 1) & ")"
+        .Cells(lastRow, 9).Formula = "=SUM(I2:I" & (lastRow - 1) & ")"
+    End With
+
+    ' Fixed Costs Section
+    With wsMain
+        .Cells(lastRow + 2, 1).Value = "Fixed Costs Input"
+        .Cells(lastRow + 3, 1).Resize(8, 1).Value = Application.Transpose(Array( _
+            "Salla Subscription (SAR)", "Salaries (2 Employees) (SAR)", "Rent/Storage (SAR)", _
+            "Utilities (Electricity/Water) (SAR)", "Marketing Fees (SAR)", "Payment Processing Fees (SAR)", _
+            "Maintenance/Training (SAR)", "Returns/Other Costs (SAR)"))
+        .Cells(lastRow + 3, 2).Resize(8, 1).Value = 0
+        .Cells(lastRow + 11, 1).Value = "Total Fixed Costs (SAR)"
+        .Cells(lastRow + 11, 2).Formula = "=SUM(B" & (lastRow + 3) & ":B" & (lastRow + 10) & ")"
+        .Cells(lastRow + 12, 1).Value = "Fixed Cost per Product (SAR)"
+        .Cells(lastRow + 12, 2).Formula = "=IF(B" & (lastRow + 11) & ">0,B" & (lastRow + 11) & "/COUNTA(A2:A" & (lastRow - 1) & "),0)"
+    End With
+
+    ' Distribute fixed costs
+    For i = 2 To lastRow - 1
+        If wsMain.Cells(i, 1).Value <> "" Then
+            wsMain.Cells(i, 3).Formula = "=B" & (lastRow + 12)
+        End If
+    Next i
+
+    ' Format fixed costs section
+    With wsMain.Range("A" & (lastRow + 2) & ":B" & (lastRow + 12))
+        .Font.Bold = True
+        .Interior.Color = RGB(240, 240, 240)
+        .Borders.LineStyle = xlContinuous
+        .HorizontalAlignment = xlCenter
+    End With
+
+    ' Data validation (clear old first)
+    With wsMain
+        .Range("B" & (lastRow + 3) & ":B" & (lastRow + 10)).Validation.Delete
+        .Range("B" & (lastRow + 3) & ":B" & (lastRow + 10)).Validation.Add _
+            Type:=xlValidateDecimal, AlertStyle:=xlValidAlertStop, _
+            Operator:=xlGreaterEqual, Formula1:="0"
+
+        .Range("D2:D" & (lastRow - 1)).Validation.Delete
+        .Range("D2:D" & (lastRow - 1)).Validation.Add _
+            Type:=xlValidateDecimal, AlertStyle:=xlValidAlertStop, _
+            Operator:=xlGreaterEqual, Formula1:="0"
+
+        .Range("F2:F" & (lastRow - 1)).Validation.Delete
+        .Range("F2:F" & (lastRow - 1)).Validation.Add _
+            Type:=xlValidateWholeNumber, AlertStyle:=xlValidAlertStop, _
+            Operator:=xlGreaterEqual, Formula1:="0"
+    End With
+
+    ' Purchases Sheet
+    Set wsPurchases = CreateOrClearSheet("Purchases Sheet")
+    With wsPurchases
+        .Cells(1, 1).Resize(1, 9).Value = Array( _
+            "Product", "Supplier", "Purchase Date", _
+            "Quantity Purchased", "Purchase Price per Unit (SAR)", "Shipping Cost (SAR)", _
+            "Storage Cost (SAR)", "Expiration Date", "Total Purchase Cost (SAR)")
+        With .Range("A1:I1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(0, 112, 192)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+        For i = 2 To LAST_DATA_ROW
+            .Cells(i, 1).Value = wsMain.Cells(i, 1).Value
+            .Cells(i, 9).Formula = "=IFERROR((E" & i & "*D" & i & ")+F" & i & "+G" & i & ",0)"
+        Next i
+        .Columns("A:I").AutoFit
+    End With
+
+    ' Sales Sheet
+    Set wsSales = CreateOrClearSheet("Sales Sheet")
+    With wsSales
+        .Cells(1, 1).Resize(1, 8).Value = Array( _
+            "Order Date", "Order Number", "Product", _
+            "Quantity Sold", "Selling Price (SAR)", "Discount (SAR)", "Payment Method", "Revenue (SAR)")
+        With .Range("A1:H1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(0, 112, 192)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+
+        .Cells(1, 10).Value = "Revenue Summary"
+        .Cells(2, 10).Value = "Daily Revenue"
+        .Cells(2, 11).Formula = "=SUMIF(A:A,TODAY(),H:H)"
+        .Cells(3, 10).Value = "Weekly Revenue"
+        .Cells(3, 11).Formula = "=SUMIFS(H:H,A:A,"">=""&TODAY()-7,A:A,""<=""&TODAY())"
+        .Cells(4, 10).Value = "Monthly Revenue"
+        .Cells(4, 11).Formula = "=SUMIFS(H:H,A:A,"">=""&EOMONTH(TODAY(),-1)+1,A:A,""<=""&TODAY())"
+        .Cells(5, 10).Value = "Custom Period (Start Date)"
+        .Cells(6, 10).Value = "Custom Period (End Date)"
+        .Cells(7, 10).Value = "Custom Revenue"
+        .Cells(7, 11).Formula = "=SUMIFS(H:H,A:A,"">=""&K5,A:A,""<=""&K6)"
+
+        For i = 2 To 100
+            .Cells(i, 8).Formula = "=IFERROR((E" & i & "*D" & i & ")-F" & i & ",0)"
+        Next i
+        .Columns("A:K").AutoFit
+    End With
+
+    ' Inventory Sheet
+    Set wsInventory = CreateOrClearSheet("Inventory Sheet")
+    With wsInventory
+        .Cells(1, 1).Resize(1, 6).Value = Array( _
+            "Product", "Original Quantity", "Quantity Sold", _
+            "Remaining Quantity", "Inventory Value (SAR)", "Turnover Rate (Days)")
+        With .Range("A1:F1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(0, 112, 192)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+
+        For i = 2 To LAST_DATA_ROW
+            .Cells(i, 1).Value = wsMain.Cells(i, 1).Value
+            .Cells(i, 2).Value = 300
+            .Cells(i, 3).Value = wsMain.Cells(i, 6).Value
+            .Cells(i, 4).Formula = "=MAX(0,B" & i & "-C" & i & ")"
+            .Cells(i, 5).Formula = "=D" & i & "*'Main Cost Sheet'!D" & i
+            .Cells(i, 6).Formula = "=IF(C" & i & ">0,365/(C" & i & "/B" & i & "),0)"
+        Next i
+        .Cells(LAST_DATA_ROW + 8, 1).Value = "Total"
+        .Cells(LAST_DATA_ROW + 8, 5).Formula = "=SUM(E2:E" & (LAST_DATA_ROW + 7) & ")"
+        .Columns("A:F").AutoFit
+    End With
+
+    ' Equipment Analysis Sheet
+    Set wsEquipment = CreateOrClearSheet("Equipment Analysis Sheet")
+    With wsEquipment
+        .Cells(1, 1).Resize(1, 8).Value = Array( _
+            "Equipment Name", "Cost (SAR)", "Expected Annual Revenue Increase (SAR)", _
+            "Discount Rate (%)", "Years", "ROI (%)", "Payback Period (Years)", "NPV (SAR)")
+        With .Range("A1:H1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = RGB(0, 112, 192)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlCenter
+        End With
+        For i = 2 To 10
+            .Cells(i, 4).Value = 5
+            .Cells(i, 5).Value = 5
+            .Cells(i, 6).Formula = "=IFERROR((C" & i & "*E" & i & "-B" & i & ")/B" & i & "*100,0)"
+            .Cells(i, 7).Formula = "=IFERROR(B" & i & "/C" & i & ",0)"
+            .Cells(i, 8).Formula = "=IFERROR(NPV(D" & i & "/100,C" & i & "*{1,1,1,1,1})-B" & i & ",0)"
+        Next i
+        .Columns("A:H").AutoFit
+    End With
+
+    ' Report Sheet
+    Set wsReport = CreateOrClearSheet("Report Sheet")
+    With wsReport
+        .Cells(1, 1).Value = "Financial Report for Freeze-Dried Products Store"
+        .Cells(2, 1).Value = "Total Revenue (SAR):"
+        .Cells(2, 2).Formula = "='Main Cost Sheet'!H" & lastRow
+        .Cells(3, 1).Value = "Total Costs (SAR):"
+        .Cells(3, 2).Formula = "='Main Cost Sheet'!C" & lastRow & "+'Main Cost Sheet'!G" & lastRow
+        .Cells(4, 1).Value = "Net Profit (SAR):"
+        .Cells(4, 2).Formula = "='Main Cost Sheet'!I" & lastRow
+        .Cells(5, 1).Value = "Average Profit Margin (%):"
+        .Cells(5, 2).Formula = "=AVERAGE('Main Cost Sheet'!J2:J" & (lastRow - 1) & ")"
+        .Cells(6, 1).Value = "Top Selling Product:"
+        .Cells(6, 2).Formula = "=INDEX('Main Cost Sheet'!A2:A" & (lastRow - 1) & ",MATCH(MAX('Main Cost Sheet'!F2:F" & (lastRow - 1) & "),'Main Cost Sheet'!F2:F" & (lastRow - 1) & ",0))"
+        .Cells(7, 1).Value = "Inventory Value (SAR):"
+        .Cells(7, 2).Formula = "='Inventory Sheet'!E" & (LAST_DATA_ROW + 8)
+        .Cells(8, 1).Value = "Equipment Recommendation:"
+        .Cells(8, 2).Value = "Buy if NPV > 0 in Equipment Analysis Sheet"
+        With .Range("A1:B8")
+            .Font.Bold = True
+            .Interior.Color = RGB(240, 240, 240)
+            .Borders.LineStyle = xlContinuous
+            .HorizontalAlignment = xlLeft
+        End With
+        .Columns("A:B").AutoFit
+    End With
+
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+
+    MsgBox "Sheets are ready! Enter data in:" & vbCrLf & _
+           "- Fixed Costs: B" & (lastRow + 3) & ":B" & (lastRow + 10) & vbCrLf & _
+           "- Variable Costs: D2:D" & (lastRow - 1) & vbCrLf & _
+           "- Sales Data: Sales Sheet (from Salla)" & vbCrLf & _
+           "Use Report Sheet for CV. To improve store:" & vbCrLf & _
+           "- Focus on high-margin products (Column J)" & vbCrLf & _
+           "- Reduce variable costs" & vbCrLf & _
+           "- Monitor inventory turnover (Inventory Sheet)", vbInformation, "Setup Complete"
+    Exit Sub
+
+ErrorHandler:
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Error in RunCostModel: " & Err.Number & ": " & Err.Description & vbCrLf & _
+           "Please check your inputs and try again.", vbCritical, "Error"
+End Sub
+
+' =========================
+' Helper: create or clear a worksheet
+' =========================
+Private Function CreateOrClearSheet(sheetName As String) As Worksheet
+    On Error Resume Next
+    Set CreateOrClearSheet = ThisWorkbook.Sheets(sheetName)
+    If CreateOrClearSheet Is Nothing Then
+        Set CreateOrClearSheet = ThisWorkbook.Sheets.Add
+        CreateOrClearSheet.Name = sheetName
+    End If
+    CreateOrClearSheet.Cells.Clear
+    On Error GoTo 0
+End Function
+"""
 
 # =============================
 # واجهة المستخدم
 # =============================
-st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل + مُصدِّر كود Excel VBA</div></div>", unsafe_allow_html=True)
+st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل + مُصدِّر Excel VBA (نموذج التكاليف)</div></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
@@ -832,6 +1076,7 @@ with st.sidebar:
 
 symbols_input = st.text_input("أدخل رمزًا واحدًا:", st.session_state.get("syms","")).strip()
 
+# تجهيز الرمز
 if symbols_input:
     sym = symbols_input.upper()
     if suffix and sym.isalnum() and not sym.endswith(".SR"): sym = sym + suffix
@@ -851,6 +1096,7 @@ if st.button("🚀 تحليل الشركة"):
         dcf_total, dcf_table = simple_dcf(r["OwnerEarnings"], disc_rate, growth_rate, int(years), term_growth)
         dcf_per_share = (dcf_total / r["Shares"]) if (not pd.isna(dcf_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
 
+        # حساسية
         best_total,_ = simple_dcf(r["OwnerEarnings"], disc_rate-0.02, growth_rate+0.02, int(years), term_growth)
         worst_total,_= simple_dcf(r["OwnerEarnings"], disc_rate+0.02, growth_rate-0.02, int(years), term_growth)
         best_ps = (best_total/r["Shares"]) if (not pd.isna(best_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
@@ -878,7 +1124,8 @@ if st.button("🚀 تحليل الشركة"):
     # ======== تبويبات ========
     tabs = st.tabs([
         "1) ملخص تنفيذي", "2) نظرة عامة", "3) القوائم (BS/IS/CF)",
-        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل", "11) تصدير Excel VBA"
+        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات",
+        "9) الأسباب/التحقق", "10) تصدير Excel VBA"
     ])
 
     with tabs[0]:
@@ -941,7 +1188,7 @@ if st.button("🚀 تحليل الشركة"):
     with tabs[4]:
         st.caption("خطوط بسيطة توضح الاتجاه العام (إيرادات/صافي ربح/أرباح المالك).")
         try:
-            st.line_chart(historical_trends(data["inc_a"], data["cf_a"], years=5).T)
+            st.line_chart(trend_df.T)
         except Exception:
             st.info("لا تتوفر بيانات تاريخية كافية للرسم.")
 
@@ -986,7 +1233,7 @@ if st.button("🚀 تحليل الشركة"):
             st.dataframe(pd.DataFrame(comps_rows), use_container_width=True)
         else:
             st.caption("أدخل رموزًا للمقارنة في الشريط الجانبي.")
-        st.session_state._comps_rows = comps_rows
+        st.session_state._comps_rows = comps_rows  # حفظ للمراجعة إن احتجت
 
     with tabs[8]:
         df_flags = pd.DataFrame([{"البند":k, "التقييم":v} for k,v in dict(sorted(flags.items())).items()])
@@ -995,35 +1242,22 @@ if st.button("🚀 تحليل الشركة"):
         st.markdown("**الأسباب التفصيلية:**")
         st.dataframe(pd.DataFrame(reasons), use_container_width=True)
 
+    # === استبدلنا تبويب التنزيل: الآن يقدّم ملف VBA (RunCostModel) بدلاً من Markdown ===
     with tabs[9]:
-        comps_rows = st.session_state.get("_comps_rows", [])
-        report_md = build_report_md(
-            sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"], reasons, components,
-            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data
-        )
-        st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
-                           file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
-        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
-
-    with tabs[10]:
-        comps_rows = st.session_state.get("_comps_rows", [])
-        report_md = build_report_md(
-            sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"], reasons, components,
-            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data
-        )
-        vba_code = build_vba_module(sym, data.get("info", {}), r, score, verdict, report_md, dcf_per_share, best_ps, worst_ps, reasons, comps_rows)
-        st.text_area("📄 معاينة كود VBA (للمطور في Excel)", vba_code, height=300)
+        st.markdown("### ⬇️ تصدير كود Excel VBA — نموذج التكاليف (RunCostModel)")
+        vba_code = build_costmodel_vba_module()
+        st.text_area("📄 معاينة الكود", vba_code, height=340)
         st.download_button(
             "⬇️ تنزيل ملف VBA (.bas)",
             data=vba_code.encode("utf-8"),
-            file_name=f"BuffettReport_{sym}.bas",
+            file_name="CostModel_RunCostModel.bas",
             mime="text/plain"
         )
         st.markdown("""
 **طريقة الاستخدام في Excel:**
 1) افتح ملف Excel الهدف → تبويب **Developer** → **Visual Basic**.  
-2) من قائمة **File** داخل محرّر VBA اختر **Import File…** واختر الملف `.bas`.  
-3) سيظهر Module باسم `BuffettReportModule` → شغّل الإجراء **PopulateBuffettReport**.
+2) من **File** داخل محرّر VBA اختر **Import File…** ثم اختر الملف `.bas`.  
+3) سيظهر Module جديد → شغّل الإجراء **RunCostModel** لإعداد جميع الأوراق (Main Cost / Sales / Purchases / Inventory / Equipment / Report).
 """)
 
 # دليل مبسّط
