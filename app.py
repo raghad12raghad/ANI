@@ -710,14 +710,14 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
-# مُصدِّر Excel VBA Module — جدول 2×2 بسيط
+# مُصدِّر Excel VBA Module — جدول 2×2 بسيط (نسخة إنجليزية مصحّحة)
 # =============================
 def build_company_summary_vba_module() -> str:
-    # موديول VBA بسيط جدًا: ينشئ ورقة "Company Summary" ويضع جدول 2x2 فقط
+    # VBA module: creates "Company Summary" sheet and a 2x2 formatted table (English-only labels)
     return """Option Explicit
 
 '=========================
-'  Minimal Company Sheet: 2x2 Table Only
+'  Minimal Company Sheet: 2x2 Table Only (English-only labels)
 '=========================
 Sub RunCompanySummary()
     On Error GoTo EH
@@ -725,49 +725,67 @@ Sub RunCompanySummary()
     Application.DisplayAlerts = False
 
     Dim ws As Worksheet
-    Set ws = CreateOrClearSheet(""Company Summary"")
+    Set ws = CreateOrClearSheet("Company Summary")
 
     With ws
         .Cells.Clear
-        ' خلايا الجدول 2x2
-        .Range(""A1"").Value = ""العنوان""
-        .Range(""B1"").Value = ""القيمة""
-        .Range(""A2"").Value = ""مثال""
-        .Range(""B2"").Value = ""123""
 
-        ' تحويله لجدول منسّق (ListObject)
-        Dim lo As ListObject
+        ' 2x2 header + sample row (English only)
+        .Range("A1").Value = "Field"
+        .Range("B1").Value = "Value"
+        .Range("A2").Value = "Example"
+        .Range("B2").Value = "123"
+
+        ' Remove existing table (if any)
         On Error Resume Next
-        .ListObjects(""SummaryTable"").Delete
+        .ListObjects("SummaryTable").Unlist
+        If Err.Number <> 0 Then
+            Err.Clear
+        End If
         On Error GoTo 0
-        Set lo = .ListObjects.Add(xlSrcRange, .Range(""A1:B2""), , xlYes)
-        lo.Name = ""SummaryTable""
-        lo.TableStyle = ""TableStyleMedium2""
 
-        .Columns(""A:B"").AutoFit
+        ' Create a new ListObject table
+        Dim lo As ListObject
+        Set lo = .ListObjects.Add(SourceType:=xlSrcRange, _
+                                  Source:=.Range("A1:B2"), _
+                                  XlListObjectHasHeaders:=xlYes)
+        lo.Name = "SummaryTable"
+
+        ' Try to apply an English table style; fallback if not available
+        On Error Resume Next
+        lo.TableStyle = "TableStyleMedium2"
+        If Err.Number <> 0 Then
+            Err.Clear
+            lo.TableStyle = "TableStyleMedium1"
+        End If
+        On Error GoTo 0
+
+        .Columns("A:B").AutoFit
     End With
 
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
-    MsgBox ""تم إنشاء جدول 2×2 بسيط في ورقة 'Company Summary'."", vbInformation, ""Done""
+    MsgBox "A 2x2 table was created on 'Company Summary'.", vbInformation, "Done"
     Exit Sub
+
 EH:
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
-    MsgBox ""Error: "" & Err.Number & "" - "" & Err.Description, vbCritical, ""RunCompanySummary""
+    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical, "RunCompanySummary"
 End Sub
 
 '=========================
 ' Helper
 '=========================
-Private Function CreateOrClearSheet(sheetName As String) As Worksheet
+Private Function CreateOrClearSheet(ByVal sheetName As String) As Worksheet
     On Error Resume Next
-    Set CreateOrClearSheet = ThisWorkbook.Sheets(sheetName)
+    Set CreateOrClearSheet = ThisWorkbook.Worksheets(sheetName)
     If CreateOrClearSheet Is Nothing Then
-        Set CreateOrClearSheet = ThisWorkbook.Sheets.Add
+        Set CreateOrClearSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
         CreateOrClearSheet.Name = sheetName
+    Else
+        CreateOrClearSheet.Cells.Clear
     End If
-    CreateOrClearSheet.Cells.Clear
     On Error GoTo 0
 End Function
 """
