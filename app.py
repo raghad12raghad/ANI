@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report)
-ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل بمستوى قريب من التقارير الرسمية.
+📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report + Excel VBA Export)
+ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل + مُصدِّر كود VBA لملء Excel.
 تشغيل: streamlit run app.py
 اعتماديات: streamlit, yfinance, pandas, numpy
 """
@@ -36,15 +36,6 @@ THEME_CSS = """
   .kpi .value { font-size:20px; font-weight:700; }
   .kpi .sub { color:#64748b; font-size:12px; margin-top:4px; }
   .kpi.ok .value { color:#059669; } .kpi.mid .value{ color:#d97706; } .kpi.bad .value{ color:#dc2626; }
-
-  .buffett-table {border-collapse: collapse; width: 100%; direction: rtl; font-family: Arial, sans-serif;}
-  .buffett-table th, .buffett-table td {border: 1px solid #e5e7eb; padding: 8px; text-align: center;}
-  .buffett-table th {background-color: #0ea5e9; color: white;}
-  .buffett-table tr:nth-child(even){background-color: #f8fafc;}
-  .buffett-table tr:hover {background-color: #eef2ff;}
-  .buffett-table td.green { color: #059669; font-weight: bold; }
-  .buffett-table td.yellow { color: #d97706; font-weight: bold; }
-  .buffett-table td.red { color: #dc2626; font-weight: bold; }
 </style>
 """
 st.markdown(THEME_CSS, unsafe_allow_html=True)
@@ -134,7 +125,6 @@ def kpi_card(title, value_str, sub=None, status="ok"):
     """
 
 def md_table(headers, rows):
-    """يبني جدول Markdown بسيط."""
     line1 = "| " + " | ".join(headers) + " |"
     line2 = "| " + " | ".join(["---"]*len(headers)) + " |"
     lines = [line1, line2]
@@ -145,7 +135,6 @@ def md_table(headers, rows):
 # مفاتيح Yahoo
 REV_KEYS = ["Total Revenue","Revenue","TotalRevenue","Sales"]
 COGS_KEYS = ["Cost Of Revenue","Cost of Revenue","CostOfRevenue","COGS"]
-GP_KEYS   = ["Gross Profit","GrossProfit"]
 OPINC_KEYS= ["Operating Income","OperatingIncome","EBIT"]
 EBIT_KEYS = ["EBIT","Operating Income","OperatingIncome"]
 NI_KEYS   = ["Net Income","NetIncome","Net Income Common Stockholders","Net Income Applicable To Common Shares"]
@@ -309,7 +298,6 @@ def compute_core_metrics(data: dict, mode: str):
     # السيولة/الملاءة
     current_ratio = safe_div(ca, cl)
     quick_ratio   = safe_div((ca - (inv if not pd.isna(inv) else 0)), cl)
-    debt_to_equity = safe_div(total_debt, te)
     roa = safe_div(ni, ta)
     roe = safe_div(ni, te)
 
@@ -379,7 +367,7 @@ def buffett_scorecard(r):
     score = 0
     flags = {}
     reasons = []
-    components = []  # جديد: تفصيل النقاط
+    components = []
 
     def set_flag(name, ok, mid=False, points_ok=10, points_mid=5, points_bad=0, explain=""):
         nonlocal score
@@ -390,7 +378,6 @@ def buffett_scorecard(r):
         components.append({"البند": name, "الرمز": sym, "النقاط": pts, "التفسير": explain})
         return sym
 
-    # 1) ROIC ≥ 15%
     roic = r["ROIC"]
     ok = (not pd.isna(roic) and roic >= 0.15)
     mid = (not pd.isna(roic) and 0.10 <= roic < 0.15)
@@ -399,23 +386,19 @@ def buffett_scorecard(r):
     reasons.append({"البند":"ROIC ≥15%","الحالة":status_word(sym),
                     "السبب": "غير متوفر" if pd.isna(roic) else f"ROIC = {to_percent(roic)}."})
 
-    # 2) الهامش الإجمالي ≥25%
     gm = r["GrossMargin"]; ok=(not pd.isna(gm) and gm>=0.25); mid=(not pd.isna(gm) and 0.18<=gm<0.25)
     sym=set_flag("هامش إجمالي قوي", ok, mid,
                  explain=("غير متوفر" if pd.isna(gm) else f"Gross Margin = {to_percent(gm)}."))
     reasons.append({"البند":"هامش إجمالي قوي","الحالة":status_word(sym),"السبب": "غير متوفر" if pd.isna(gm) else f"{to_percent(gm)}."})
 
-    # 3) جودة الأرباح OCF/NI ≥1
     q=r["OCF/NI"]; ok=(not pd.isna(q) and q>=1.0); mid=(not pd.isna(q) and 0.8<=q<1.0)
     sym=set_flag("جودة الأرباح OCF/NI ≥1", ok, mid, explain=("غير متوفر" if pd.isna(q) else f"OCF/NI = {to_ratio(q)}."))
     reasons.append({"البند":"جودة الأرباح OCF/NI","الحالة":status_word(sym),"السبب": "غير متوفر" if pd.isna(q) else f"{to_ratio(q)}."})
 
-    # 4) هامش أرباح المالك ≥8%
     f=r["FCF_Margin"]; ok=(not pd.isna(f) and f>=0.08); mid=(not pd.isna(f) and 0.05<=f<0.08)
     sym=set_flag("هامش أرباح المالك ≥8%", ok, mid, explain=("غير متوفر" if pd.isna(f) else f"OE Margin = {to_percent(f)}."))
     reasons.append({"البند":"هامش التدفق الحر","الحالة":status_word(sym),"السبب":"غير متوفر" if pd.isna(f) else f"{to_percent(f)}."})
 
-    # 5) هيكل دين متحفظ
     td, cash = r["TotalDebt"], r["Cash"]; oe = r["OwnerEarnings"]
     net_debt = np.nan if pd.isna(td) else td - (0 if pd.isna(cash) else cash)
     ratio_debt_oe = (td/oe) if (not any(pd.isna(x) for x in [td, oe]) and oe>0) else np.nan
@@ -428,17 +411,14 @@ def buffett_scorecard(r):
                     "السبب": "بيانات غير متوفرة" if (pd.isna(td) and pd.isna(cash)) else
                     (f"صافي الدين: {to_num(net_debt)}" + (f"، الدين/أرباح المالك: {to_ratio(ratio_debt_oe)}" if not pd.isna(ratio_debt_oe) else ""))})
 
-    # 6) تغطية الفوائد ≥10x
     ic=r["InterestCoverage"]; ok=(not pd.isna(ic) and ic>=10.0); mid=(not pd.isna(ic) and 6.0<=ic<10.0)
     sym=set_flag("تغطية الفوائد ≥10x", ok, mid, explain=("غير متوفر" if pd.isna(ic) else f"Interest Coverage = {to_ratio(ic)}."))
     reasons.append({"البند":"تغطية الفوائد","الحالة":status_word(sym),"السبب":"غير متوفر" if pd.isna(ic) else f"{to_ratio(ic)}."})
 
-    # 7) CCC ≤ 0 يوم (≤30 مقبول)
     ccc=r["CCC"]; ok=(not pd.isna(ccc) and ccc<=0); mid=(not pd.isna(ccc) and ccc<=30)
     sym=set_flag("دورة التحويل النقدي ≤0", ok, mid, points_ok=5, points_mid=2, explain=("غير متوفر" if pd.isna(ccc) else f"CCC = {to_days(ccc)}."))
     reasons.append({"البند":"دورة التحويل النقدي","الحالة":status_word(sym),"السبب":"غير متوفر" if pd.isna(ccc) else f"{to_days(ccc)}."})
 
-    # 8) تقييم معقول
     oey=r["OwnerEarningsYield"]; pto=r["P/OwnerEarnings"]
     ok = (not pd.isna(oey) and oey>=0.06) or (not pd.isna(pto) and pto<=20)
     mid= (not pd.isna(oey) and oey>=0.04) or (not pd.isna(pto) and pto<=25)
@@ -454,7 +434,7 @@ def buffett_scorecard(r):
     return float(score), flags, verdict, (np.nan if pd.isna(td) else net_debt), reasons, components
 
 # =============================
-# اتجاهات تاريخية (مبسّطة للرسوم)
+# اتجاهات تاريخية (مبسّطة)
 # =============================
 def historical_trends(inc_a: pd.DataFrame, cf_a: pd.DataFrame, years: int = 5):
     def take_series(df, keys):
@@ -492,7 +472,7 @@ def simple_dcf(oe_base, discount_rate=0.12, growth_rate=0.05, years=5, terminal_
     return total_pv, pd.DataFrame(flows)
 
 # =============================
-# نصوص مساعدة للتقرير
+# نصوص مساعدة للتقرير (Markdown)
 # =============================
 def executive_summary(sym, info, r, score, verdict, dcf_value_ps, price):
     sector = info.get("sector") or "—"; industry = info.get("industry") or "—"
@@ -522,7 +502,6 @@ def company_overview(info):
 
 def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, components, mode, trend_df,
                     dcf_table, base_ps, best_ps, worst_ps, comps_rows, data):
-    # ترويسة ومعلومات عامة
     currency = info.get("financialCurrency") or info.get("currency") or "—"
     meta = r.get("_meta", {})
     header = [
@@ -537,7 +516,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         company_overview(info),
     ]
 
-    # 3) تحليل القوائم
     bs_tbl = md_table(
         ["البند","القيمة"],
         [
@@ -571,7 +549,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 4) نسب مالية مع شرح
     ratios_tbl = md_table(
         ["الفئة","النسبة","تفسير سريع"],
         [
@@ -579,7 +556,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
             ["الربحية: Net", to_percent(r["NetMargin"]), "صافي هامش الربح النهائي."],
             ["ROA", to_percent(r["ROA"]), "عائد على الأصول."],
             ["ROE", to_percent(r["ROE"]), "عائد على حقوق الملكية."],
-            ["ROIC", to_percent(r["ROIC"]), "عائد على رأس المال المستثمر (مفتاح بافيت)."],
+            ["ROIC", to_percent(r["ROIC"]), "عائد على رأس المال المستثمر."],
             ["السيولة: Current", to_ratio(r["CurrentRatio"]), "قدرة تغطية الخصوم الجارية."],
             ["السيولة: Quick", to_ratio(r["QuickRatio"]), "سيولة أكثر تحفظاً."],
             ["المديونية: D/E", to_ratio(safe_div(r["TotalDebt"], r["TotalEquity"])), "كلما أقل كان أفضل."],
@@ -595,7 +572,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 5) اتجاهات (ملخص نصي)
     trend_lines = []
     if isinstance(trend_df, pd.DataFrame) and not trend_df.empty:
         def dir_txt(series):
@@ -608,14 +584,12 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         trend_lines.append(f"- أرباح المالك: {dir_txt(trend_df.loc['OwnerEarnings'])}")
     trends_section = "\n".join(trend_lines) if trend_lines else "لا تتوفر بيانات تاريخية كافية."
 
-    # 6) قائمة تحقق بافيت — جدول نقاط + تبرير
     comp_rows = [[c["البند"], c["الرمز"], c["النقاط"], c["التفسير"]] for c in components]
     buffett_tbl = md_table(["البند","التقييم","النقاط","المبررات"], comp_rows)
 
-    # 7) تقييم (DCF) + حساسية
     dcf_rows = dcf_table.to_dict("records") if isinstance(dcf_table, pd.DataFrame) and not dcf_table.empty else []
     dcf_md = md_table(["السنة","التدفق المتوقع","القيمة الحالية"],
-                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات (تحقق من المدخلات)."
+                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات."
 
     sens_tbl = md_table(
         ["السيناريو","القيمة الجوهرية/سهم"],
@@ -626,7 +600,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 8) مقارنات (إن وُجدت)
     comps_md = ""
     if comps_rows:
         comps_md = md_table(
@@ -634,7 +607,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
             [[row["الرمز"], row["P/E"], row["P/B"], row["ROE"], row["ROIC"], row["هامش صافي"]] for row in comps_rows]
         )
 
-    # 9) مخاطر + 10) توصيات
     risks = []
     if not pd.isna(r["CurrentRatio"]) and r["CurrentRatio"]<1.0: risks.append("سيولة جارية ضعيفة (<1.0).")
     if not pd.isna(r["InterestCoverage"]) and r["InterestCoverage"]<6.0: risks.append("تغطية فوائد منخفضة (<6x).")
@@ -655,24 +627,22 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         recs.append("لا توجد توصيات تشغيلية مُلحة استنادًا للبيانات المتاحة.")
     recs_md = "\n".join([f"- {x}" for x in recs])
 
-    # 11) ملاحق: المنهجية + مسرد
     appendix = """
 **المنهجية (مختصر):**
 - تم الاعتماد على Yahoo Finance عبر yfinance وقد تختلف تسمية البنود بين الشركات.
 - **TTM** = مجموع آخر 4 أرباع لقائمة الدخل/التدفق النقدي، وأحدث ميزانية متاحة.
 - **ROIC (تقريبي)** = NOPAT / (الدين + حقوق – النقد) حيث NOPAT ≈ EBIT×(1–الضريبة).
-- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط لا يفرّق Capex الصيانة/النمو).
-- حدود بافيت المستخدمَة عامة؛ قد تُعدّل حسب القطاع وطبيعة الأعمال.
+- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط).
+- حدود بافيت المستخدمَة عامة؛ قد تُعدّل حسب القطاع.
 
 **مسرد مختصر:**
 - **OCF**: التدفق النقدي التشغيلي.
 - **Capex**: الإنفاق الرأسمالي.
 - **OE**: أرباح المالك = OCF – Capex.
 - **CCC**: دورة التحويل النقدي = DSO + DIO – DPO (أقل أفضل).
-- **OE Yield**: OE / القيمة السوقية (كلما أعلى كان أفضل).
+- **OE Yield**: OE / القيمة السوقية.
 """
 
-    # تجميع كل الأقسام
     sections = []
     sections += header
     sections += [
@@ -691,7 +661,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         buffett_tbl,
         "",
         "## 7) التقييم بطريقة التدفقات المخصومة (DCF)",
-        f"- **السعر الحالي:** {to_num(price)} | **القيمة الجوهرية/سهم (أساسي):** {to_num(dcf_ps)}",
+        f"- **السعر الحالي:** {to_num(r['Price'])} | **القيمة الجوهرية/سهم (أساسي):** {to_num(dcf_ps)}",
         "", "### جدول التدفقات والقيمة الحالية", dcf_md,
         "", "### حساسية مبسّطة", sens_tbl,
         "",
@@ -712,9 +682,134 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
+# مُصدِّر Excel VBA Module
+# =============================
+def vba_literal(s: str) -> str:
+    if s is None:
+        return ""
+    return str(s).replace('"', '""')
+
+def kv_line(key, value) -> str:
+    return f'    arr(i, 1) = "{vba_literal(key)}": arr(i, 2) = "{vba_literal(value)}": i = i + 1'
+
+def build_vba_module(sym: str, info: dict, r: dict, score: float, verdict: str,
+                     report_md: str, dcf_ps: float, best_ps: float, worst_ps: float,
+                     reasons: list, comps_rows: list) -> str:
+    fields = [
+        ("Symbol", sym),
+        ("Company", info.get("longName") or sym),
+        ("Sector", info.get("sector") or "—"),
+        ("Industry", info.get("industry") or "—"),
+        ("Currency", info.get("financialCurrency") or info.get("currency") or "—"),
+        ("Price", to_num(r.get("Price"))),
+        ("MarketCap", to_num(r.get("MarketCap"))),
+        ("Revenue", to_num(r.get("Revenue"))),
+        ("GrossProfit", to_num(r.get("GrossProfit"))),
+        ("EBIT", to_num(r.get("EBIT"))),
+        ("NetIncome", to_num(r.get("NetIncome"))),
+        ("GrossMargin", to_percent(r.get("GrossMargin"))),
+        ("OperatingMargin", to_percent(r.get("OperatingMargin"))),
+        ("NetMargin", to_percent(r.get("NetMargin"))),
+        ("ROA", to_percent(r.get("ROA"))),
+        ("ROE", to_percent(r.get("ROE"))),
+        ("ROIC", to_percent(r.get("ROIC"))),
+        ("CurrentRatio", to_ratio(r.get("CurrentRatio"))),
+        ("QuickRatio", to_ratio(r.get("QuickRatio"))),
+        ("DebtToEquity", to_ratio(safe_div(r.get("TotalDebt"), r.get("TotalEquity")))),
+        ("InterestCoverage", to_ratio(r.get("InterestCoverage"))),
+        ("CCC", to_days(r.get("CCC"))),
+        ("OE", to_num(r.get("OwnerEarnings"))),
+        ("OE_Yield", to_percent(r.get("OwnerEarningsYield"))),
+        ("P_to_OE", "—" if pd.isna(r.get("P/OwnerEarnings")) else f"{r.get('P/OwnerEarnings'):.2f}x"),
+        ("BVPS", to_num(r.get("BVPS"))),
+        ("PE", "—" if pd.isna(r.get("PE")) else f"{r.get('PE'):.2f}x"),
+        ("PB", "—" if pd.isna(r.get("PB")) else f"{r.get('PB'):.2f}x"),
+        ("BuffettScore", f"{score:.0f}/100"),
+        ("Verdict", verdict),
+        ("DCF_FairValue_perShare", to_num(dcf_ps)),
+        ("Sensitivity_Best", to_num(best_ps)),
+        ("Sensitivity_Worst", to_num(worst_ps)),
+    ]
+
+    reasons_text = "\n".join([f"- {x.get('البند')}: {x.get('الحالة')} — {x.get('السبب')}" for x in reasons]) or "—"
+    comps_text = ""
+    if comps_rows:
+        comps_text = "الرمز\tP/E\tP/B\tROE\tROIC\tهامش صافي\n" + "\n".join(
+            [f"{c.get('الرمز','')}\t{c.get('P/E','')}\t{c.get('P/B','')}\t{c.get('ROE','')}\t{c.get('ROIC','')}\t{c.get('هامش صافي','')}" for c in comps_rows]
+        )
+
+    lines = []
+    lines.append('Attribute VB_Name = "BuffettReportModule"')
+    lines.append("Option Explicit")
+    lines.append("")
+    lines.append("Public Sub PopulateBuffettReport()")
+    lines.append('    On Error GoTo EH')
+    lines.append('    Dim ws As Worksheet, i As Long')
+    lines.append('    Application.ScreenUpdating = False')
+    lines.append('    Application.DisplayAlerts = False')
+    lines.append('    ')
+    lines.append('    Dim nm As String: nm = "BuffettReport"')
+    lines.append('    Dim exists As Boolean: exists = False')
+    lines.append('    Dim sh As Worksheet')
+    lines.append('    For Each sh In ThisWorkbook.Worksheets')
+    lines.append('        If sh.Name = nm Then exists = True: Exit For')
+    lines.append('    Next sh')
+    lines.append('    If exists Then ThisWorkbook.Worksheets(nm).Delete')
+    lines.append('    Set ws = ThisWorkbook.Worksheets.Add')
+    lines.append('    ws.Name = nm')
+    lines.append('    ')
+    lines.append('    ReDim arr(1 To ' + str(len(fields)) + ', 1 To 2)')
+    lines.append('    i = 1')
+    for k, v in fields:
+        lines.append(kv_line(k, v))
+    lines.append('    With ws')
+    lines.append('        .Range("A1").Value = "Field"')
+    lines.append('        .Range("B1").Value = "Value"')
+    lines.append('        .Range("A1:B1").Font.Bold = True')
+    lines.append('        .Range("A2").Resize(UBound(arr,1), UBound(arr,2)).Value = arr')
+    lines.append('        .Columns("A:B").EntireColumn.AutoFit')
+    lines.append('    End With')
+    lines.append('    ')
+    lines.append('    Dim startRow As Long: startRow = 2 + UBound(arr,1) + 2')
+    lines.append('    ws.Cells(startRow, 1).Value = "Executive Summary (AR)"')
+    lines.append('    ws.Cells(startRow, 1).Font.Bold = True')
+    es = executive_summary(sym, info, r, score, verdict, dcf_ps, r.get("Price"))
+    lines.append(f'    ws.Cells(startRow + 1, 1).Value = "{vba_literal(es)}"')
+    lines.append('    ws.Cells(startRow + 1, 1).WrapText = True')
+    lines.append('    ws.Columns("A").ColumnWidth = 90')
+    lines.append('    ')
+    lines.append('    Dim rs As Long: rs = startRow + 3')
+    lines.append('    ws.Cells(rs, 1).Value = "Reasons / Checks"')
+    lines.append('    ws.Cells(rs, 1).Font.Bold = True')
+    lines.append(f'    ws.Cells(rs + 1, 1).Value = "{vba_literal(reasons_text)}"')
+    lines.append('    ws.Cells(rs + 1, 1).WrapText = True')
+    if comps_text:
+        lines.append('    Dim cr As Long: cr = rs + 3')
+        lines.append('    ws.Cells(cr, 1).Value = "Peers (Simple Table)"')
+        lines.append('    ws.Cells(cr, 1).Font.Bold = True')
+        lines.append(f'    ws.Cells(cr + 1, 1).Value = "{vba_literal(comps_text)}"')
+        lines.append('    ws.Cells(cr + 1, 1).WrapText = True')
+    lines.append('    Dim mr As Long: mr = ws.UsedRange.Rows.Count + 2')
+    lines.append('    ws.Cells(mr, 1).Value = "Full Markdown (for reference)"')
+    lines.append('    ws.Cells(mr, 1).Font.Bold = True')
+    lines.append(f'    ws.Cells(mr + 1, 1).Value = "{vba_literal(report_md)}"')
+    lines.append('    ws.Cells(mr + 1, 1).WrapText = True')
+    lines.append('    ')
+    lines.append('    Application.DisplayAlerts = True')
+    lines.append('    Application.ScreenUpdating = True')
+    lines.append('    MsgBox "Buffett report populated successfully.", vbInformation')
+    lines.append('    Exit Sub')
+    lines.append('EH:')
+    lines.append('    Application.DisplayAlerts = True')
+    lines.append('    Application.ScreenUpdating = True')
+    lines.append('    MsgBox "Error: " & Err.Description, vbCritical')
+    lines.append("End Sub")
+    return "\n".join(lines)
+
+# =============================
 # واجهة المستخدم
 # =============================
-st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل للتحميل</div></div>", unsafe_allow_html=True)
+st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل + مُصدِّر كود Excel VBA</div></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
@@ -737,7 +832,6 @@ with st.sidebar:
 
 symbols_input = st.text_input("أدخل رمزًا واحدًا:", st.session_state.get("syms","")).strip()
 
-# تجهيز الرمز
 if symbols_input:
     sym = symbols_input.upper()
     if suffix and sym.isalnum() and not sym.endswith(".SR"): sym = sym + suffix
@@ -757,7 +851,6 @@ if st.button("🚀 تحليل الشركة"):
         dcf_total, dcf_table = simple_dcf(r["OwnerEarnings"], disc_rate, growth_rate, int(years), term_growth)
         dcf_per_share = (dcf_total / r["Shares"]) if (not pd.isna(dcf_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
 
-        # حساسية
         best_total,_ = simple_dcf(r["OwnerEarnings"], disc_rate-0.02, growth_rate+0.02, int(years), term_growth)
         worst_total,_= simple_dcf(r["OwnerEarnings"], disc_rate+0.02, growth_rate-0.02, int(years), term_growth)
         best_ps = (best_total/r["Shares"]) if (not pd.isna(best_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
@@ -785,7 +878,7 @@ if st.button("🚀 تحليل الشركة"):
     # ======== تبويبات ========
     tabs = st.tabs([
         "1) ملخص تنفيذي", "2) نظرة عامة", "3) القوائم (BS/IS/CF)",
-        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل"
+        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل", "11) تصدير Excel VBA"
     ])
 
     with tabs[0]:
@@ -831,7 +924,7 @@ if st.button("🚀 تحليل الشركة"):
         st.caption("(*) تبسيطات بسبب اختلاف تفصيل البنود في Yahoo Finance.")
 
     with tabs[3]:
-        ratios_tbl = [{
+        ratios_tbl_df = [{
             "Gross": to_percent(r["GrossMargin"]), "Net": to_percent(r["NetMargin"]),
             "ROA": to_percent(r["ROA"]), "ROE": to_percent(r["ROE"]), "ROIC": to_percent(r["ROIC"]),
             "Current": to_ratio(r["CurrentRatio"]), "Quick": to_ratio(r["QuickRatio"]),
@@ -843,12 +936,12 @@ if st.button("🚀 تحليل الشركة"):
             "P/B": "—" if pd.isna(r["PB"]) else f"{r['PB']:.2f}x",
             "BVPS": to_num(r["BVPS"])
         }]
-        st.dataframe(pd.DataFrame(ratios_tbl), use_container_width=True)
+        st.dataframe(pd.DataFrame(ratios_tbl_df), use_container_width=True)
 
     with tabs[4]:
         st.caption("خطوط بسيطة توضح الاتجاه العام (إيرادات/صافي ربح/أرباح المالك).")
         try:
-            st.line_chart(trend_df.T)
+            st.line_chart(historical_trends(data["inc_a"], data["cf_a"], years=5).T)
         except Exception:
             st.info("لا تتوفر بيانات تاريخية كافية للرسم.")
 
@@ -893,7 +986,7 @@ if st.button("🚀 تحليل الشركة"):
             st.dataframe(pd.DataFrame(comps_rows), use_container_width=True)
         else:
             st.caption("أدخل رموزًا للمقارنة في الشريط الجانبي.")
-        st.session_state._comps_rows = comps_rows  # لاستخدامها في التقرير
+        st.session_state._comps_rows = comps_rows
 
     with tabs[8]:
         df_flags = pd.DataFrame([{"البند":k, "التقييم":v} for k,v in dict(sorted(flags.items())).items()])
@@ -911,6 +1004,28 @@ if st.button("🚀 تحليل الشركة"):
         st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
                            file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
         st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
+
+    with tabs[10]:
+        comps_rows = st.session_state.get("_comps_rows", [])
+        report_md = build_report_md(
+            sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"], reasons, components,
+            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data
+        )
+        vba_code = build_vba_module(sym, data.get("info", {}), r, score, verdict, report_md, dcf_per_share, best_ps, worst_ps, reasons, comps_rows)
+        st.text_area("📄 معاينة كود VBA (للمطور في Excel)", vba_code, height=300)
+        st.download_button(
+            "⬇️ تنزيل ملف VBA (.bas)",
+            data=vba_code.encode("utf-8"),
+            file_name=f"BuffettReport_{sym}.bas",
+            mime="text/plain"
+        )
+        st.markdown("""
+**طريقة الاستخدام في Excel:**
+1) افتح ملف Excel الهدف → تبويب **Developer** → **Visual Basic**.  
+2) من قائمة **File** داخل محرّر VBA اختر **Import File…** واختر الملف `.bas`.  
+3) سيظهر Module باسم `BuffettReportModule` → شغّل الإجراء **PopulateBuffettReport**.
+""")
+
 # دليل مبسّط
 with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
     st.markdown("""
