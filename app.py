@@ -8,6 +8,7 @@
 
 import re
 from html import escape
+from typing import List
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -58,7 +59,7 @@ def normalize_idx(s: str) -> str:
 def build_index_map(df: pd.DataFrame):
     return {normalize_idx(raw): raw for raw in df.index.astype(str)}
 
-def find_any(df: pd.DataFrame, keys: list[str], col):
+def find_any(df: pd.DataFrame, keys: List[str], col):
     if df is None or df.empty or col is None:
         return np.nan
     idx = build_index_map(df)
@@ -207,9 +208,10 @@ def load_company_data(ticker: str):
     price = shares = market_cap = np.nan
     try:
         fi = t.fast_info
-        price = float(fi.get("last_price", np.nan))
-        shares = float(fi.get("shares", np.nan))
-        market_cap = float(fi.get("market_cap", np.nan))
+        # fast_info غالباً dict-like
+        price = float(getattr(fi, "get", dict().get)("last_price", np.nan))
+        shares = float(getattr(fi, "get", dict().get)("shares", np.nan))
+        market_cap = float(getattr(fi, "get", dict().get)("market_cap", np.nan))
     except Exception:
         pass
 
@@ -710,10 +712,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
-# مُصدِّر Excel VBA Module — جدول 2×2 بسيط (نسخة إنجليزية مصحّحة)
-# =============================
-def build_company_summary_vba_module() 
-""" # =============================
 # مُصدِّر Excel VBA Module — Company Summary (جدول بسيط لبيانات الشركة)
 # =============================
 def build_company_summary_vba_module() -> str:
@@ -971,7 +969,6 @@ Private Function CreateOrClearSheet(ByVal sheetName As String) As Worksheet
 End Function
 """
 
-
 # =============================
 # واجهة المستخدم
 # =============================
@@ -1174,7 +1171,7 @@ if st.button("🚀 تحليل الشركة"):
         st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
 
     with tabs[10]:
-        st.markdown("### ⬇️ تصدير كود Excel VBA — **RunCompanySummary** (ينشئ جدول 2×2 بسيط)")
+        st.markdown("### ⬇️ تصدير كود Excel VBA — **RunCompanySummary** (ملخص شركة بجدول بسيط)")
         vba_code = build_company_summary_vba_module()
         st.text_area("📄 معاينة الكود", vba_code, height=280)
         st.download_button(
