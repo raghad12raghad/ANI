@@ -1,3 +1,4 @@
+مع اكسل بس اكسل يبغاله تعديل 
 # -*- coding: utf-8 -*-
 """
 📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report + Excel VBA 2x2)
@@ -8,7 +9,6 @@
 
 import re
 from html import escape
-from typing import List
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -59,7 +59,7 @@ def normalize_idx(s: str) -> str:
 def build_index_map(df: pd.DataFrame):
     return {normalize_idx(raw): raw for raw in df.index.astype(str)}
 
-def find_any(df: pd.DataFrame, keys: List[str], col):
+def find_any(df: pd.DataFrame, keys: list[str], col):
     if df is None or df.empty or col is None:
         return np.nan
     idx = build_index_map(df)
@@ -194,7 +194,6 @@ def load_company_data(ticker: str):
     try:
         data_info = {}
         try:
-            # بعض النسخ لا تدعم get_info
             data_info = t.get_info()
         except Exception:
             data_info = getattr(t, "info", {}) or {}
@@ -712,134 +711,64 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
-# مُصدِّر Excel VBA Module — جدول 2×2 بسيط (مصَحَّح)
+# مُصدِّر Excel VBA Module — جدول 2×2 بسيط (نسخة إنجليزية مصحّحة)
 # =============================
 def build_company_summary_vba_module() -> str:
-    return r'''Option Explicit
+    # VBA module: creates "Company Summary" sheet and a 2x2 formatted table (English-only labels)
+    return """Option Explicit
 
 '=========================
-' Company Summary: Simple 2-column facts table (Arabic-friendly)
-' يجلب بيانات أساسية من Yahoo Finance ويعرضها في جدول بسيط مع تنسيقات أساسية
+'  Minimal Company Sheet: 2x2 Table Only (English-only labels)
 '=========================
 Sub RunCompanySummary()
     On Error GoTo EH
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
 
-    Dim tkr As String
-    tkr = InputBox("اكتب الرمز (مثال: AAPL أو 1120.SR):", "Company Summary")
-    If Len(tkr) = 0 Then GoTo Done
-
-    Dim url As String, js As String
-    url = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/" & tkr & _
-          "?modules=price,assetProfile,summaryDetail,defaultKeyStatistics"
-    js = HttpGet(url)
-    If Len(js) = 0 Then
-        MsgBox "تعذر جلب البيانات. تحقّق من الاتصال أو الرمز.", vbExclamation, "Company Summary"
-        GoTo Done
-    End If
-
-    '==== استخراج الحقول الأساسية
-    Dim name$, sector$, industry$, country$, currency$
-    Dim priceVar As Variant, mcapVar As Variant, sharesVar As Variant
-    Dim peVar As Variant, betaVar As Variant, wkHiVar As Variant, wkLoVar As Variant
-
-    name = NzStr(JsonFindString(js, "longName"))
-    If name = "" Then name = NzStr(JsonFindString(js, "shortName"))
-    sector = NzStr(JsonFindString(js, "sector"))
-    industry = NzStr(JsonFindString(js, "industry"))
-    country = NzStr(JsonFindString(js, "country"))
-    currency = NzStr(JsonFindString(js, "currency"))
-
-    priceVar = NzNum(JsonFindRaw(js, "regularMarketPrice"))
-    mcapVar  = NzNum(JsonFindRaw(js, "marketCap"))
-    sharesVar = NzNum(JsonFindRaw(js, "sharesOutstanding"))
-    peVar = NzNum(JsonFindRaw(js, "trailingPE"))
-    If IsEmpty(peVar) Then peVar = NzNum(JsonFindRaw(js, "forwardPE"))
-    betaVar = NzNum(JsonFindRaw(js, "beta"))
-    wkHiVar = NzNum(JsonFindRaw(js, "fiftyTwoWeekHigh"))
-    wkLoVar = NzNum(JsonFindRaw(js, "fiftyTwoWeekLow"))
-
-    '==== إنشاء الورقة + تعبئة البيانات
     Dim ws As Worksheet
     Set ws = CreateOrClearSheet("Company Summary")
 
     With ws
         .Cells.Clear
-        .DisplayRightToLeft = True         ' اتجاه يمين-إلى-يسار لملاءمة العربية
-        .Cells.Font.Name = "Segoe UI"
-        .Cells.Font.Size = 10
 
-        ' العناوين
-        .Range("A1").Value = "الحقل / Field"
-        .Range("B1").Value = "القيمة / Value"
-        With .Range("A1:B1")
-            .Font.Bold = True
-            .Interior.Color = RGB(14, 165, 233) ' sky-500
-            .Font.Color = vbWhite
-            .RowHeight = 22
-            .HorizontalAlignment = xlCenter
-            .VerticalAlignment = xlCenter
-        End With
+        ' 2x2 header + sample row (English only)
+        .Range("A1").Value = "Field"
+        .Range("B1").Value = "Value"
+        .Range("A2").Value = "Example"
+        .Range("B2").Value = "123"
 
-        Dim r As Long: r = 2
-        r = PutRow(ws, r, "Ticker", tkr)
-        r = PutRow(ws, r, "Company Name", name)
-        r = PutRow(ws, r, "Sector / Industry", sector & " / " & industry)
-        r = PutRow(ws, r, "Country", country)
-        r = PutRow(ws, r, "Currency", currency)
-        r = PutRow(ws, r, "Price", priceVar)
-        r = PutRow(ws, r, "Market Cap", mcapVar)
-        r = PutRow(ws, r, "Shares Outstanding", sharesVar)
-        r = PutRow(ws, r, "P/E (trailing/forward)", peVar)
-        r = PutRow(ws, r, "Beta", betaVar)
-        r = PutRow(ws, r, "52W High", wkHiVar)
-        r = PutRow(ws, r, "52W Low", wkLoVar)
-
-        ' تكوين جدول Excel من النطاق
+        ' Remove existing table (if any)
         On Error Resume Next
         .ListObjects("SummaryTable").Unlist
-        If Err.Number <> 0 Then Err.Clear
+        If Err.Number <> 0 Then
+            Err.Clear
+        End If
         On Error GoTo 0
 
-        Dim lastRow As Long: lastRow = r - 1
+        ' Create a new ListObject table
         Dim lo As ListObject
         Set lo = .ListObjects.Add(SourceType:=xlSrcRange, _
-                                  Source:=.Range("A1:B" & lastRow), _
+                                  Source:=.Range("A1:B2"), _
                                   XlListObjectHasHeaders:=xlYes)
         lo.Name = "SummaryTable"
 
+        ' Try to apply an English table style; fallback if not available
         On Error Resume Next
         lo.TableStyle = "TableStyleMedium2"
-        If Err.Number <> 0 Then Err.Clear: lo.TableStyle = "TableStyleMedium9"
+        If Err.Number <> 0 Then
+            Err.Clear
+            lo.TableStyle = "TableStyleMedium1"
+        End If
         On Error GoTo 0
 
-        ' تنسيق الأرقام تلقائياً في العمود B (عملة/فواصل)
-        FormatIfNumeric .Range("B2:B" & lastRow), currency
-
         .Columns("A:B").AutoFit
-        .Range("A2").Select
-        ActiveWindow.FreezePanes = True
-
-        ' إعدادات الطباعة
-        With .PageSetup
-            .Orientation = xlPortrait
-            .Zoom = False
-            .FitToPagesWide = 1
-            .FitToPagesTall = False
-            .LeftMargin = Application.InchesToPoints(0.4)
-            .RightMargin = Application.InchesToPoints(0.4)
-            .TopMargin = Application.InchesToPoints(0.5)
-            .BottomMargin = Application.InchesToPoints(0.5)
-            .CenterHorizontally = True
-        End With
     End With
 
-Done:
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
-    If Len(js) > 0 Then MsgBox "تم إنشاء ملخص الشركة في ورقة 'Company Summary'.", vbInformation, "Done"
+    MsgBox "A 2x2 table was created on 'Company Summary'.", vbInformation, "Done"
     Exit Sub
+
 EH:
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
@@ -847,61 +776,246 @@ EH:
 End Sub
 
 '=========================
-' HTTP (late-binding)
+' Helper
 '=========================
-Private Function HttpGet(ByVal url As String) As String
-    On Error GoTo EH
-    Dim x As Object
-    Set x = CreateObject("MSXML2.XMLHTTP")
-    x.Open "GET", url, False
-    x.setRequestHeader "User-Agent", "Mozilla/5.0"
-    x.send
-    If x.Status = 200 Then HttpGet = CStr(x.responseText) Else HttpGet = ""
-    Exit Function
-EH:
-    HttpGet = ""
+Private Function CreateOrClearSheet(ByVal sheetName As String) As Worksheet
+    On Error Resume Next
+    Set CreateOrClearSheet = ThisWorkbook.Worksheets(sheetName)
+    If CreateOrClearSheet Is Nothing Then
+        Set CreateOrClearSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        CreateOrClearSheet.Name = sheetName
+    Else
+        CreateOrClearSheet.Cells.Clear
+    End If
+    On Error GoTo 0
 End Function
+"""
 
-'=========================
-' JSON helpers (lightweight)
-'=========================
-Private Function JsonFindRaw(ByVal js As String, ByVal key As String) As String
-    Dim pat As String: pat = """" & key & """:{" & """raw"":"
-    Dim p As Long: p = InStr(1, js, pat, vbTextCompare)
-    If p = 0 Then Exit Function
-    p = p + Len(pat)
-    Dim i As Long: i = p
-    Dim ch As String, buf As String
-    Do While i <= Len(js)
-        ch = Mid$(js, i, 1)
-        If (ch Like "[0-9.-]") Or ch = "E" Or ch = "e" Or ch = "+" Then
-            buf = buf & ch
-        Else
-            Exit Do
-        End If
-        i = i + 1
-    Loop
-    JsonFindRaw = Trim$(buf)
-End Function
+# =============================
+# واجهة المستخدم
+# =============================
+st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل + مُصدِّر كود Excel VBA (جدول 2×2 بسيط)</div></div>", unsafe_allow_html=True)
 
-Private Function JsonFindString(ByVal js As String, ByVal key As String) As String
-    Dim pat As String: pat = """" & key & """:"""
-    Dim p As Long: p = InStr(1, js, pat, vbTextCompare)
-    If p = 0 Then Exit Function
-    p = p + Len(pat)
-    Dim i As Long: i = p
-    Dim ch As String, buf As String
-    Do While i <= Len(js)
-        ch = Mid$(js, i, 1)
-        If ch = """" Then Exit Do
-        If ch = "\" Then
-            i = i + 1
-            If i <= Len(js) Then ch = Mid$(js, i, 1)
-        End If
-        buf = buf & ch
-        i = i + 1
-    Loop
-    JsonFindString = buf
-End Function
+with st.sidebar:
+    market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
+    suffix = "" if market == "السوق الأمريكي" else ".SR"
+    mode = st.radio("الفترة", ["Annual", "TTM"], index=1)
+    simple_mode = st.toggle("وضع مبسّط (يناسب غير المتخصص)", value=True)
+    st.markdown("---")
+    st.markdown("#### إعدادات DCF")
+    disc_rate = st.number_input("معدل الخصم (r)", 0.05, 0.30, 0.12, 0.01)
+    growth_rate = st.number_input("نمو السنوات (g)", 0.00, 0.30, 0.05, 0.01)
+    years = st.number_input("عدد السنوات", 3, 10, 5, 1)
+    term_growth = st.number_input("نمو نهائي (gₜ)", 0.00, 0.05, 0.02, 0.005)
+    st.caption("تلميح: r > gₜ وإلا يفشل التقييم.")
+    st.markdown("---")
+    comps_input = st.text_input("مقارنات (اختياري، رموز بمسافة/سطر)", "")
+    st.markdown("---")
+    st.markdown("#### أمثلة")
+    if st.button("USA: AAPL"): st.session_state.syms = "AAPL"
+    if st.button("KSA: 1120"): st.session_state.syms = "1120"
 
-Private Function NzStr(ByVal s As String)
+symbols_input = st.text_input("أدخل رمزًا واحدًا:", st.session_state.get("syms","")).strip()
+
+# تجهيز الرمز
+if symbols_input:
+    sym = symbols_input.upper()
+    if suffix and sym.isalnum() and not sym.endswith(".SR"): sym = sym + suffix
+else:
+    sym = ""
+
+if st.button("🚀 تحليل الشركة"):
+    if not sym:
+        st.warning("يرجى إدخال رمز واحد.")
+        st.stop()
+
+    with st.spinner("جاري تحميل البيانات وتحليلها..."):
+        data = load_company_data(sym)
+        r = compute_core_metrics(data, mode)
+        score, flags, verdict, net_debt, reasons, components = buffett_scorecard(r)
+        trend_df = historical_trends(data["inc_a"], data["cf_a"], years=5)
+        dcf_total, dcf_table = simple_dcf(r["OwnerEarnings"], disc_rate, growth_rate, int(years), term_growth)
+        dcf_per_share = (dcf_total / r["Shares"]) if (not pd.isna(dcf_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
+
+        # حساسية
+        best_total,_ = simple_dcf(r["OwnerEarnings"], disc_rate-0.02, growth_rate+0.02, int(years), term_growth)
+        worst_total,_= simple_dcf(r["OwnerEarnings"], disc_rate+0.02, growth_rate-0.02, int(years), term_growth)
+        best_ps = (best_total/r["Shares"]) if (not pd.isna(best_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
+        worst_ps= (worst_total/r["Shares"]) if (not pd.isna(worst_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
+
+    # ======== KPIs ========
+    st.markdown("### المؤشرات الرئيسية")
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    with cc1: st.markdown(kpi_card("ROIC", to_percent(r["ROIC"]), "≥15% أفضلية", classify(r["ROIC"], ok=0.15, mid=0.10)), unsafe_allow_html=True)
+    with cc2: st.markdown(kpi_card("الهامش الإجمالي", to_percent(r["GrossMargin"]), "≥25% قوي", classify(r["GrossMargin"], ok=0.25, mid=0.18)), unsafe_allow_html=True)
+    with cc3: st.markdown(kpi_card("OCF/NI", to_ratio(r["OCF/NI"]), "≥1.0 جودة أرباح", classify(r["OCF/NI"], ok=1.0, mid=0.8)), unsafe_allow_html=True)
+    with cc4: st.markdown(kpi_card("CCC", to_days(r["CCC"]), "أقل أفضل", classify(r["CCC"], ok=0, mid=30, reverse=True)), unsafe_allow_html=True)
+
+    dd1, dd2, dd3, dd4 = st.columns(4)
+    with dd1:
+        de_class = classify(safe_div(r["TotalDebt"], r["TotalEquity"]), ok=0.5, mid=1.0, reverse=True)
+        st.markdown(kpi_card("D/E", to_ratio(safe_div(r["TotalDebt"], r["TotalEquity"])), "≤0.5 مريح", de_class), unsafe_allow_html=True)
+    with dd2: st.markdown(kpi_card("هامش OE", to_percent(r["FCF_Margin"]), "≥8% جيد", classify(r["FCF_Margin"], ok=0.08, mid=0.05)), unsafe_allow_html=True)
+    with dd3: st.markdown(kpi_card("تغطية الفوائد", to_ratio(r["InterestCoverage"]), "≥10x آمن", classify(r["InterestCoverage"], ok=10, mid=6)), unsafe_allow_html=True)
+    with dd4: st.markdown(kpi_card("OE Yield", to_percent(r["OwnerEarningsYield"]), "≥6% معقول", classify(r["OwnerEarningsYield"], ok=0.06, mid=0.04)), unsafe_allow_html=True)
+
+    st.write("**درجة بافيت:** ", f"{score:.0f}/100 — {verdict}")
+    st.progress(min(max(int(score), 0), 100)/100)
+
+    # ======== تبويبات ========
+    tabs = st.tabs([
+        "1) ملخص تنفيذي", "2) نظرة عامة", "3) القوائم (BS/IS/CF)",
+        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل", "11) تصدير Excel VBA"
+    ])
+
+    with tabs[0]:
+        st.markdown(executive_summary(sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"]))
+        if simple_mode: st.caption("تم تبسيط العرض. عطّل 'وضع مبسّط' لعرض مزيد من التفاصيل.")
+
+    with tabs[1]:
+        st.markdown(company_overview(data.get("info", {})))
+
+    with tabs[2]:
+        cA, cB = st.columns(2)
+        with cA:
+            st.markdown("### قائمة الدخل")
+            is_rows = [{
+                "الإيرادات": to_num(r["Revenue"]),
+                "الربح الإجمالي": to_num(r["GrossProfit"]),
+                "EBIT": to_num(r["EBIT"]),
+                "صافي الربح": to_num(r["NetIncome"]),
+                "الهامش الإجمالي": to_percent(r["GrossMargin"]),
+                "هامش التشغيل": to_percent(r["OperatingMargin"]),
+                "هامش صافي": to_percent(r["NetMargin"])
+            }]
+            st.dataframe(pd.DataFrame(is_rows), use_container_width=True)
+        with cB:
+            st.markdown("### الميزانية العمومية")
+            bs_rows = [{
+                "الأصول المتداولة": to_num(r["CurrentAssets"]),
+                "الخصوم المتداولة": to_num(r["CurrentLiabilities"]),
+                "حقوق الملكية": to_num(r["TotalEquity"]),
+                "النقد": to_num(r["Cash"]),
+                "الاستثمارات القصيرة": to_num(r["STInvest"]),
+                "إجمالي الأصول": to_num(r["TotalAssets"]),
+                "إجمالي الدين": to_num(r["TotalDebt"]),
+            }]
+            st.dataframe(pd.DataFrame(bs_rows), use_container_width=True)
+        st.markdown("### التدفقات النقدية")
+        cf_rows = [{
+            "تشغيلي OCF": to_num(r["OCF"]),
+            "Capex": to_num(r["Capex"]),
+            "أرباح المالك (OE)": to_num(r["OwnerEarnings"])
+        }]
+        st.dataframe(pd.DataFrame(cf_rows), use_container_width=True)
+        st.caption("(*) تبسيطات بسبب اختلاف تفصيل البنود في Yahoo Finance.")
+
+    with tabs[3]:
+        ratios_tbl_df = [{
+            "Gross": to_percent(r["GrossMargin"]), "Net": to_percent(r["NetMargin"]),
+            "ROA": to_percent(r["ROA"]), "ROE": to_percent(r["ROE"]), "ROIC": to_percent(r["ROIC"]),
+            "Current": to_ratio(r["CurrentRatio"]), "Quick": to_ratio(r["QuickRatio"]),
+            "D/E": to_ratio(safe_div(r["TotalDebt"], r["TotalEquity"])),
+            "Interest Cov": to_ratio(r["InterestCoverage"]),
+            "Asset Turn": to_ratio(r["AssetTurnover"]),
+            "DSO": to_days(r["DSO"]), "DIO": to_days(r["DIO"]), "DPO": to_days(r["DPO"]),
+            "P/E": "—" if pd.isna(r["PE"]) else f"{r['PE']:.2f}x",
+            "P/B": "—" if pd.isna(r["PB"]) else f"{r['PB']:.2f}x",
+            "BVPS": to_num(r["BVPS"])
+        }]
+        st.dataframe(pd.DataFrame(ratios_tbl_df), use_container_width=True)
+
+    with tabs[4]:
+        st.caption("خطوط بسيطة توضح الاتجاه العام (إيرادات/صافي ربح/أرباح المالك).")
+        try:
+            st.line_chart(trend_df.T)
+        except Exception:
+            st.info("لا تتوفر بيانات تاريخية كافية للرسم.")
+
+    with tabs[5]:
+        risks = []
+        if not pd.isna(r["CurrentRatio"]) and r["CurrentRatio"]<1.0: risks.append("سيولة جارية دون 1.0 قد تضغط على السداد القصير.")
+        if not pd.isna(r["InterestCoverage"]) and r["InterestCoverage"]<6.0: risks.append("تغطية فوائد منخفضة تُعلي حساسية الفائدة/الأرباح.")
+        if not pd.isna(r["CCC"]) and r["CCC"]>30: risks.append("دورة تحويل نقدي بطيئة (>30 يوم).")
+        if not pd.isna(r["OwnerEarnings"]) and r["OwnerEarnings"]<=0: risks.append("أرباح مالك ضعيفة/سلبية تحدّ من المرونة الاستثمارية.")
+        st.write("- " + "\n- ".join(risks) if risks else "لا توجد مخاطر جوهرية ظاهرة من البيانات المتاحة.")
+
+    with tabs[6]:
+        st.markdown("### DCF مبسّط (على أرباح المالك)")
+        if not pd.isna(dcf_total):
+            st.dataframe(dcf_table, use_container_width=True)
+            st.write("**القيمة الحالية الإجمالية (للشركة):**", to_num(dcf_total))
+            if not pd.isna(dcf_per_share): st.write("**القيمة الجوهرية/سهم:**", to_num(dcf_per_share))
+            st.write("**حساسية:** أفضل:", to_num(best_ps), " | أساسي:", to_num(dcf_per_share), " | أسوأ:", to_num(worst_ps))
+        else:
+            st.info("لا يمكن حساب DCF (تحقق من r>gₜ و OE>0).")
+
+    with tabs[7]:
+        comps_raw = [c.strip().upper() for c in comps_input.replace("\n"," ").split() if c.strip()]
+        comps_rows = []
+        if comps_raw:
+            with st.spinner("جاري جلب المقارنات..."):
+                for c in comps_raw[:8]:
+                    try:
+                        cc = c if (suffix=="" or c.endswith(".SR")) else c+suffix
+                        d = load_company_data(cc)
+                        rr = compute_core_metrics(d, mode)
+                        comps_rows.append({
+                            "الرمز": cc,
+                            "P/E": "—" if pd.isna(rr["PE"]) else f"{rr['PE']:.2f}",
+                            "P/B": "—" if pd.isna(rr["PB"]) else f"{rr['PB']:.2f}",
+                            "ROE": to_percent(rr["ROE"]),
+                            "ROIC": to_percent(rr["ROIC"]),
+                            "هامش صافي": to_percent(rr["NetMargin"])
+                        })
+                    except Exception as e:
+                        comps_rows.append({"الرمز": c, "P/E":"—","P/B":"—","ROE":"—","ROIC":"—","هامش صافي":f"خطأ: {e}"})
+            st.dataframe(pd.DataFrame(comps_rows), use_container_width=True)
+        else:
+            st.caption("أدخل رموزًا للمقارنة في الشريط الجانبي.")
+        st.session_state._comps_rows = comps_rows  # لاستخدامها في التقرير
+
+    with tabs[8]:
+        df_flags = pd.DataFrame([{"البند":k, "التقييم":v} for k,v in dict(sorted(flags.items())).items()])
+        st.markdown("**قائمة تحقق بافيت:**")
+        st.dataframe(df_flags, use_container_width=True)
+        st.markdown("**الأسباب التفصيلية:**")
+        st.dataframe(pd.DataFrame(reasons), use_container_width=True)
+
+    with tabs[9]:
+        comps_rows = st.session_state.get("_comps_rows", [])
+        report_md = build_report_md(
+            sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"], reasons, components,
+            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data
+        )
+        st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
+                           file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
+        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
+
+    with tabs[10]:
+        st.markdown("### ⬇️ تصدير كود Excel VBA — **RunCompanySummary** (ينشئ جدول 2×2 بسيط)")
+        vba_code = build_company_summary_vba_module()
+        st.text_area("📄 معاينة الكود", vba_code, height=280)
+        st.download_button(
+            "⬇️ تنزيل ملف VBA (.bas)",
+            data=vba_code.encode("utf-8"),
+            file_name=f"CompanySummary_RunCompanySummary_{sym if sym else 'TICKER'}.bas",
+            mime="text/plain"
+        )
+        st.markdown("""
+**طريقة الاستخدام في Excel (النسخة البسيطة):**
+1) افتح Excel → **Developer** → **Visual Basic**.  
+2) من **File** داخل محرر VBA اختر **Import File…** واستورد الملف `.bas`.  
+3) شغِّل الإجراء **RunCompanySummary** وسيُنشئ ورقة **Company Summary** بجدول 2×2 فقط.
+""")
+
+# دليل مبسّط
+with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
+    st.markdown("""
+- **ROIC**: كفاءة تحويل رأس المال إلى أرباح تشغيلية بعد الضرائب.
+- **OCF/NI**: جودة الأرباح؛ ≥1.0 يعني أن النقد يدعم الربح المحاسبي.
+- **CCC**: زمن دورة النقد؛ أقل أفضل.
+- **OE Yield**: أرباح المالك/القيمة السوقية؛ مقياس لعائد ضمني.
+- **DCF مبسّط**: تقدير أولي للقيمة الجوهرية اعتمادًا على OE وافتراضات محافظة.
+""")
+
