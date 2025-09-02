@@ -1,8 +1,7 @@
-مع اكسل بس اكسل يبغاله تعديل 
 # -*- coding: utf-8 -*-
 """
-📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report + Excel VBA 2x2)
-ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل + مُصدِّر كود VBA بسيط (جدول 2×2).
+📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report)
+ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل بمستوى قريب من التقارير الرسمية.
 تشغيل: streamlit run app.py
 اعتماديات: streamlit, yfinance, pandas, numpy
 """
@@ -310,6 +309,7 @@ def compute_core_metrics(data: dict, mode: str):
     # السيولة/الملاءة
     current_ratio = safe_div(ca, cl)
     quick_ratio   = safe_div((ca - (inv if not pd.isna(inv) else 0)), cl)
+    debt_to_equity = safe_div(total_debt, te)
     roa = safe_div(ni, ta)
     roe = safe_div(ni, te)
 
@@ -379,7 +379,7 @@ def buffett_scorecard(r):
     score = 0
     flags = {}
     reasons = []
-    components = []  # تفصيل النقاط
+    components = []  # جديد: تفصيل النقاط
 
     def set_flag(name, ok, mid=False, points_ok=10, points_mid=5, points_bad=0, explain=""):
         nonlocal score
@@ -655,7 +655,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         recs.append("لا توجد توصيات تشغيلية مُلحة استنادًا للبيانات المتاحة.")
     recs_md = "\n".join([f"- {x}" for x in recs])
 
-    # 11) ملاحق
+    # 11) ملاحق: المنهجية + مسرد
     appendix = """
 **المنهجية (مختصر):**
 - تم الاعتماد على Yahoo Finance عبر yfinance وقد تختلف تسمية البنود بين الشركات.
@@ -672,6 +672,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
 - **OE Yield**: OE / القيمة السوقية (كلما أعلى كان أفضل).
 """
 
+    # تجميع كل الأقسام
     sections = []
     sections += header
     sections += [
@@ -711,90 +712,9 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
     return "\n".join(sections)
 
 # =============================
-# مُصدِّر Excel VBA Module — جدول 2×2 بسيط (نسخة إنجليزية مصحّحة)
-# =============================
-def build_company_summary_vba_module() -> str:
-    # VBA module: creates "Company Summary" sheet and a 2x2 formatted table (English-only labels)
-    return """Option Explicit
-
-'=========================
-'  Minimal Company Sheet: 2x2 Table Only (English-only labels)
-'=========================
-Sub RunCompanySummary()
-    On Error GoTo EH
-    Application.ScreenUpdating = False
-    Application.DisplayAlerts = False
-
-    Dim ws As Worksheet
-    Set ws = CreateOrClearSheet("Company Summary")
-
-    With ws
-        .Cells.Clear
-
-        ' 2x2 header + sample row (English only)
-        .Range("A1").Value = "Field"
-        .Range("B1").Value = "Value"
-        .Range("A2").Value = "Example"
-        .Range("B2").Value = "123"
-
-        ' Remove existing table (if any)
-        On Error Resume Next
-        .ListObjects("SummaryTable").Unlist
-        If Err.Number <> 0 Then
-            Err.Clear
-        End If
-        On Error GoTo 0
-
-        ' Create a new ListObject table
-        Dim lo As ListObject
-        Set lo = .ListObjects.Add(SourceType:=xlSrcRange, _
-                                  Source:=.Range("A1:B2"), _
-                                  XlListObjectHasHeaders:=xlYes)
-        lo.Name = "SummaryTable"
-
-        ' Try to apply an English table style; fallback if not available
-        On Error Resume Next
-        lo.TableStyle = "TableStyleMedium2"
-        If Err.Number <> 0 Then
-            Err.Clear
-            lo.TableStyle = "TableStyleMedium1"
-        End If
-        On Error GoTo 0
-
-        .Columns("A:B").AutoFit
-    End With
-
-    Application.DisplayAlerts = True
-    Application.ScreenUpdating = True
-    MsgBox "A 2x2 table was created on 'Company Summary'.", vbInformation, "Done"
-    Exit Sub
-
-EH:
-    Application.DisplayAlerts = True
-    Application.ScreenUpdating = True
-    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical, "RunCompanySummary"
-End Sub
-
-'=========================
-' Helper
-'=========================
-Private Function CreateOrClearSheet(ByVal sheetName As String) As Worksheet
-    On Error Resume Next
-    Set CreateOrClearSheet = ThisWorkbook.Worksheets(sheetName)
-    If CreateOrClearSheet Is Nothing Then
-        Set CreateOrClearSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
-        CreateOrClearSheet.Name = sheetName
-    Else
-        CreateOrClearSheet.Cells.Clear
-    End If
-    On Error GoTo 0
-End Function
-"""
-
-# =============================
 # واجهة المستخدم
 # =============================
-st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل + مُصدِّر كود Excel VBA (جدول 2×2 بسيط)</div></div>", unsafe_allow_html=True)
+st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل للتحميل</div></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
@@ -865,7 +785,7 @@ if st.button("🚀 تحليل الشركة"):
     # ======== تبويبات ========
     tabs = st.tabs([
         "1) ملخص تنفيذي", "2) نظرة عامة", "3) القوائم (BS/IS/CF)",
-        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل", "11) تصدير Excel VBA"
+        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل"
     ])
 
     with tabs[0]:
@@ -911,7 +831,7 @@ if st.button("🚀 تحليل الشركة"):
         st.caption("(*) تبسيطات بسبب اختلاف تفصيل البنود في Yahoo Finance.")
 
     with tabs[3]:
-        ratios_tbl_df = [{
+        ratios_tbl = [{
             "Gross": to_percent(r["GrossMargin"]), "Net": to_percent(r["NetMargin"]),
             "ROA": to_percent(r["ROA"]), "ROE": to_percent(r["ROE"]), "ROIC": to_percent(r["ROIC"]),
             "Current": to_ratio(r["CurrentRatio"]), "Quick": to_ratio(r["QuickRatio"]),
@@ -923,7 +843,7 @@ if st.button("🚀 تحليل الشركة"):
             "P/B": "—" if pd.isna(r["PB"]) else f"{r['PB']:.2f}x",
             "BVPS": to_num(r["BVPS"])
         }]
-        st.dataframe(pd.DataFrame(ratios_tbl_df), use_container_width=True)
+        st.dataframe(pd.DataFrame(ratios_tbl), use_container_width=True)
 
     with tabs[4]:
         st.caption("خطوط بسيطة توضح الاتجاه العام (إيرادات/صافي ربح/أرباح المالك).")
@@ -991,24 +911,6 @@ if st.button("🚀 تحليل الشركة"):
         st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
                            file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
         st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
-
-    with tabs[10]:
-        st.markdown("### ⬇️ تصدير كود Excel VBA — **RunCompanySummary** (ينشئ جدول 2×2 بسيط)")
-        vba_code = build_company_summary_vba_module()
-        st.text_area("📄 معاينة الكود", vba_code, height=280)
-        st.download_button(
-            "⬇️ تنزيل ملف VBA (.bas)",
-            data=vba_code.encode("utf-8"),
-            file_name=f"CompanySummary_RunCompanySummary_{sym if sym else 'TICKER'}.bas",
-            mime="text/plain"
-        )
-        st.markdown("""
-**طريقة الاستخدام في Excel (النسخة البسيطة):**
-1) افتح Excel → **Developer** → **Visual Basic**.  
-2) من **File** داخل محرر VBA اختر **Import File…** واستورد الملف `.bas`.  
-3) شغِّل الإجراء **RunCompanySummary** وسيُنشئ ورقة **Company Summary** بجدول 2×2 فقط.
-""")
-
 # دليل مبسّط
 with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
     st.markdown("""
@@ -1018,4 +920,3 @@ with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
 - **OE Yield**: أرباح المالك/القيمة السوقية؛ مقياس لعائد ضمني.
 - **DCF مبسّط**: تقدير أولي للقيمة الجوهرية اعتمادًا على OE وافتراضات محافظة.
 """)
-
