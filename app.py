@@ -1,15 +1,13 @@
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
 """
-📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report) + WS
-ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل + نظام إنذارات تلاعب/جودة أرباح (WS).
+📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report)
+ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل بمستوى قريب من التقارير الرسمية.
 تشغيل: streamlit run app.py
-اعتماديات: streamlit, yfinance, pandas, numpy, dataclasses
+اعتماديات: streamlit, yfinance, pandas, numpy
 """
 
 import re
 from html import escape
-from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict, Any
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,7 +16,7 @@ import yfinance as yf
 # =============================
 # تهيئة الصفحة + RTL + ثيم بصري
 # =============================
-st.set_page_config(page_title="📊 نموذج التحليل المالي | Buffett Principles + WS", layout="wide")
+st.set_page_config(page_title="📊 نموذج التحليل المالي | Buffett Principles", layout="wide")
 THEME_CSS = """
 <style>
   :root, html, body, .stApp { direction: rtl; }
@@ -60,7 +58,7 @@ def normalize_idx(s: str) -> str:
 def build_index_map(df: pd.DataFrame):
     return {normalize_idx(raw): raw for raw in df.index.astype(str)}
 
-def find_any(df: pd.DataFrame, keys: List[str], col):
+def find_any(df: pd.DataFrame, keys: list[str], col):
     if df is None or df.empty or col is None:
         return np.nan
     idx = build_index_map(df)
@@ -169,12 +167,6 @@ TOT_DEBT_KEYS = ["Total Debt"]
 INT_EXP_KEYS = ["Interest Expense"]
 OCF_KEYS  = ["Operating Cash Flow","Total Cash From Operating Activities"]
 CAPEX_KEYS = ["Capital Expenditure","Capital Expenditures"]
-
-# مفاتيح إضافية للـ WS
-OTHER_INC_KEYS = ["Other Income Expense","Total Other Income/Expenses Net","Other Non Operating Income (Expense)"]
-GOODWILL_KEYS  = ["Goodwill"]
-INTANG_KEYS    = ["Intangible Assets","Other Intangible Assets"]
-ACQ_KEYS       = ["Acquisitions Net","Net Income From Continuing Ops Net Minority Interest","Net Acquisition"]  # الأول هو الصحيح غالباً
 
 # =============================
 # التحميل — كاش قابلة للتسلسل
@@ -333,10 +325,9 @@ def compute_core_metrics(data: dict, mode: str):
     ar_avg  = np.nanmean([ar, ar_prev])
     ap_avg  = np.nanmean([ap, ap_prev])
     inv_avg = np.nanmean([inv, inv_prev])
-    cogs_eff = cogs if not pd.isna(cogs) else rev
     rec_turn = safe_div(rev, ar_avg)
-    pay_turn = safe_div(cogs_eff, ap_avg)
-    inv_turn = safe_div(cogs_eff, inv_avg)
+    pay_turn = safe_div(cogs if not pd.isna(cogs) else rev, ap_avg)
+    inv_turn = safe_div(cogs if not pd.isna(cogs) else rev, inv_avg)
     dso = safe_div(365, rec_turn)
     dpo = safe_div(365, pay_turn)
     dio = safe_div(365, inv_turn)
@@ -361,9 +352,9 @@ def compute_core_metrics(data: dict, mode: str):
 
     # تواريخ آخر فترات
     meta = {
-        "income_period": (str(sorted_cols(inc_q)[0]) if (mode=="TTM" and not inc_q.empty) else (str(sorted_cols(inc_a)[0]) if not inc_a.empty else "—"))),
-        "balance_period": (str(sorted_cols(bal_q)[0]) if (mode=="TTM" and not bal_q.empty) else (str(sorted_cols(bal_a)[0]) if not bal_a.empty else "—"))),
-        "cashflow_period": (str(sorted_cols(cf_q)[0]) if (mode=="TTM" and not cf_q.empty) else (str(sorted_cols(cf_a)[0]) if not cf_a.empty else "—"))),
+        "income_period": (str(sorted_cols(inc_q)[0]) if (mode=="TTM" and not inc_q.empty) else (str(sorted_cols(inc_a)[0]) if not inc_a.empty else "—")),
+        "balance_period": (str(sorted_cols(bal_q)[0]) if (mode=="TTM" and not bal_q.empty) else (str(sorted_cols(bal_a)[0]) if not bal_a.empty else "—")),
+        "cashflow_period": (str(sorted_cols(cf_q)[0]) if (mode=="TTM" and not cf_q.empty) else (str(sorted_cols(cf_a)[0]) if not cf_a.empty else "—")),
     }
 
     return {
@@ -501,351 +492,6 @@ def simple_dcf(oe_base, discount_rate=0.12, growth_rate=0.05, years=5, terminal_
     return total_pv, pd.DataFrame(flows)
 
 # =============================
-# ======== WS: Warning Signs ========
-# =============================
-@dataclass
-class WSRuleResult:
-    rule_id: str
-    title: str
-    severity: str  # 'high' | 'medium' | 'low'
-    flagged: bool
-    metric_value: Optional[float]
-    threshold: Optional[str]
-    rationale: str
-
-@dataclass
-class WSPeerStats:
-    revenue_cagr_median: float = np.nan
-    revenue_cagr_std: float = np.nan
-    gross_margin_median: float = np.nan
-    gross_margin_std: float = np.nan
-    op_margin_median: float = np.nan
-    op_margin_std: float = np.nan
-    asset_turnover_median: float = np.nan
-    asset_turnover_std: float = np.nan
-
-_WS_SEVERITY_WEIGHT = {'high': 3, 'medium': 2, 'low': 1}
-
-_WS_DISCLOSURE_PATTERNS = {
-    'rev_change_methods': r'(change|revis\w+)\s+(in\s+)?(revenue recognition|accounting polic\w+)',
-    'bill_and_hold': r'\bbill[- ]?and[- ]?hold\b',
-    'barter': r'\bbarter\b|\bnon[- ]monetary exchange\b',
-    'rebates': r'\brebate(s)?\b|\bcontra[- ]?revenue\b',
-    'related_party': r'\brelated\s+part(y|ies)\b',
-    'non_gaap_push': r'\bnon[- ]gaap\b|\badjusted\b\s+(earnings|ebitda|profit)',
-    'nonrecurring': r'\bnon[- ]?recurring\b|\bone[- ]?time\b|\bspecial charge\b',
-    'lifo_reserve': r'\bLIFO reserve\b|\bLIFO liquidation\b',
-    'capitalized_dev': r'\bcapitali[sz]ed (software|development)\b|\bintangible additions\b'
-}
-
-def _ws_trend_slope(series: pd.Series) -> Optional[float]:
-    y = series.dropna().astype(float).values
-    if len(y) < 4:
-        return None
-    x = np.arange(len(y))
-    return float(np.polyfit(x, y, 1)[0])
-
-def _ws_z(value: float, mean: float, std: float) -> Optional[float]:
-    if std is None or std == 0 or pd.isna(std) or value is None or pd.isna(value):
-        return None
-    return (value - mean) / std
-
-def _ws_ratio(numer: pd.Series, denom: pd.Series) -> pd.Series:
-    with np.errstate(divide='ignore', invalid='ignore'):
-        ratio = numer.astype(float) / denom.replace(0, np.nan).astype(float)
-    return ratio
-
-def ws_search_disclosures(text: str, key: str) -> bool:
-    if not isinstance(text, str) or key not in _WS_DISCLOSURE_PATTERNS:
-        return False
-    return re.search(_WS_DISCLOSURE_PATTERNS[key], text, flags=re.IGNORECASE) is not None
-
-def ws_build_financials_ts(data: dict, max_points: int = 12) -> pd.DataFrame:
-    """يبني DataFrame زمني لفصول حديثة (حتى 12 ربع) مع الحقول اللازمة لقواعد WS."""
-    inc_q, bal_q, cf_q = data["inc_q"], data["bal_q"], data["cf_q"]
-    # fallback سنوي لو مافيه ربعي
-    inc_src = inc_q if not inc_q.empty else data["inc_a"]
-    bal_src = bal_q if not bal_q.empty else data["bal_a"]
-    cf_src  = cf_q  if not cf_q.empty  else data["cf_a"]
-
-    cols = sorted_cols(inc_src)[:max_points] if not inc_src.empty else []
-    rows = []
-    for c in cols:
-        revenue = find_any(inc_src, REV_KEYS, c)
-        cogs    = find_any(inc_src, COGS_KEYS, c)
-        opinc   = find_any(inc_src, OPINC_KEYS, c)
-        ni      = find_any(inc_src, NI_KEYS, c)
-        other_i = find_any(inc_src, OTHER_INC_KEYS, c)
-
-        receiv  = find_any(bal_src, AR_KEYS, c)
-        inv     = find_any(bal_src, INV_KEYS, c)
-        assets  = find_any(bal_src, TA_KEYS, c)
-        goodw   = find_any(bal_src, GOODWILL_KEYS, c)
-        intang  = find_any(bal_src, INTANG_KEYS, c)
-
-        cfo     = find_any(cf_src, OCF_KEYS, c)
-        acq     = find_any(cf_src, ACQ_KEYS, c)  # غالباً سالبة عند الاستحواذ
-
-        rows.append({
-            "date": str(c),
-            "revenue": revenue,
-            "cogs": cogs,
-            "operating_income": opinc,
-            "net_income": ni,
-            "cfo": cfo,
-            "receivables": receiv,
-            "inventory": inv,
-            "total_assets": assets,
-            "goodwill": goodw,
-            "intangibles": intang,
-            "other_income": other_i,
-            "acq_cash_outflow": acq
-        })
-    return pd.DataFrame(rows)
-
-# قواعد WS الرقمية
-def ws_rule_revenue_outlier_vs_peers(df: pd.DataFrame, peers: WSPeerStats, years: float = 3.0) -> WSRuleResult:
-    title = "نمو الإيراد خارج نطاق الأقران"
-    severity = 'high'
-    if df['revenue'].dropna().empty:
-        return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, None, None, "لا توجد بيانات كافية")
-    # تقدير CAGR على آخر ~3 سنوات (12 ربع ≈ 3 سنوات إن توفر)
-    series = df['revenue'].dropna().astype(float)
-    if len(series) < 5:
-        return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, None, None, "بيانات قليلة لحساب CAGR")
-    first, last = float(series.iloc[0]), float(series.iloc[-1])
-    yrs = max(1.0, len(series)/4.0)
-    try:
-        cagr = (last/first)**(1.0/yrs) - 1.0 if first>0 else np.nan
-    except Exception:
-        cagr = np.nan
-    if pd.isna(cagr) or pd.isna(peers.revenue_cagr_median):
-        return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, cagr, None, "بدون أقران/إنحراف معياري")
-    z = _ws_z(cagr, peers.revenue_cagr_median, peers.revenue_cagr_std)
-    flagged = (z is not None) and (abs(z) >= 2.0)
-    return WSRuleResult("REV_PEER_OUTLIER", title, severity, flagged, cagr, "|z| ≥ 2", f"CAGR={cagr:.2%}, z={z:.2f}")
-
-def ws_rule_receivables_turnover_decline(df: pd.DataFrame) -> WSRuleResult:
-    title = "تدهور دوران الذمم المدينة عبر فترات"
-    severity = 'medium'
-    ar = df['receivables'].astype(float)
-    ar_avg = (ar + ar.shift(1)) / 2.0
-    rt = _ws_ratio(df['revenue'], ar_avg)
-    slope = _ws_trend_slope(rt.dropna())
-    flagged = (slope is not None) and (slope < 0) and (abs(slope) > 0.01)
-    rationale = f"slope={slope:.4f}" if slope is not None else "بيانات غير كافية"
-    return WSRuleResult("AR_TURN_DECLINE", title, severity, bool(flagged), float(slope) if slope is not None else None, "slope < -0.01", rationale)
-
-def ws_rule_asset_turnover_down_with_acq(df: pd.DataFrame) -> WSRuleResult:
-    title = "هبوط دوران الأصول مع نشاط استحواذ"
-    severity = 'high'
-    ta = df['total_assets'].astype(float)
-    ta_avg = (ta + ta.shift(1)) / 2.0
-    at = df['revenue'].astype(float) / ta_avg.replace(0, np.nan)
-    slope = _ws_trend_slope(at.dropna())
-    acq_spike = df['acq_cash_outflow'].fillna(0).astype(float).tail(8).sum() < -1e-6
-    flagged = (slope is not None) and (slope < 0) and acq_spike
-    rationale = f"AT_slope={slope:.4f}, استحواذات حديثة={acq_spike}"
-    return WSRuleResult("ASSET_TURN_ACQ", title, severity, bool(flagged), float(slope) if slope is not None else None, "slope<0 مع استحواذات", rationale)
-
-def ws_rule_other_income_in_revenue(df: pd.DataFrame) -> WSRuleResult:
-    title = "بنود غير تشغيلية/لمرة واحدة ضمن الإيراد"
-    severity = 'medium'
-    rev = df['revenue'].astype(float)
-    oi = df['other_income'].fillna(0).astype(float)
-    ratio = (oi.rolling(4, min_periods=1).sum()) / (rev.rolling(4, min_periods=1).sum().replace(0, np.nan))
-    val = float(ratio.iloc[-1]) if not ratio.dropna().empty else np.nan
-    flagged = (not np.isnan(val)) and (val >= 0.05)
-    rationale = f"other_income/ revenue (TTM) = {val:.2%}" if not np.isnan(val) else "غير متاح"
-    return WSRuleResult("OTHER_IN_REV", title, severity, flagged, val, "≥ 5%", rationale)
-
-def ws_rule_inventory_turnover_decline(df: pd.DataFrame) -> WSRuleResult:
-    title = "انخفاض دوران المخزون عبر فترات"
-    severity = 'medium'
-    inv = df['inventory'].astype(float)
-    inv_avg = (inv + inv.shift(1)) / 2.0
-    cogs = df['cogs'].astype(float)
-    it = _ws_ratio(cogs, inv_avg)
-    slope = _ws_trend_slope(it.dropna())
-    flagged = (slope is not None) and (slope < 0) and (abs(slope) > 0.01)
-    rationale = f"slope={slope:.4f}" if slope is not None else "بيانات غير كافية"
-    return WSRuleResult("INV_TURN_DECLINE", title, severity, bool(flagged), float(slope) if slope is not None else None, "slope < -0.01", rationale)
-
-def ws_rule_cfo_ni_ratio(df: pd.DataFrame) -> WSRuleResult:
-    title = "CFO/NI أقل من 1 أو يتدهور"
-    severity = 'high'
-    ni = df['net_income'].astype(float)
-    cfo = df['cfo'].astype(float)
-    ratio = (cfo.rolling(8, min_periods=4).sum()) / (ni.rolling(8, min_periods=4).sum().replace(0, np.nan))
-    val = float(ratio.iloc[-1]) if not ratio.dropna().empty else np.nan
-    trend = _ws_trend_slope(ratio.dropna())
-    flagged = (not np.isnan(val) and val < 1.0) or (trend is not None and trend < 0)
-    rationale = f"CFO/NI (rolling)={val:.2f}, trend={(f'{trend:.4f}' if trend is not None else 'NA')}"
-    return WSRuleResult("CFO_NI", title, severity, flagged, val, "<1 أو اتجاه تنازلي", rationale)
-
-def ws_rule_margins_outlier_vs_peers(df: pd.DataFrame, peers: WSPeerStats) -> List[WSRuleResult]:
-    res=[]
-    gm = None; om=None
-    try:
-        gp = (df['revenue'].astype(float) - df['cogs'].astype(float))
-        gm_series = gp / df['revenue'].replace(0, np.nan).astype(float)
-        gm = float(gm_series.dropna().iloc[-1]) if not gm_series.dropna().empty else None
-    except Exception:
-        pass
-    try:
-        om_series = df['operating_income'].astype(float) / df['revenue'].replace(0, np.nan).astype(float)
-        om = float(om_series.dropna().iloc[-1]) if not om_series.dropna().empty else None
-    except Exception:
-        pass
-
-    # GM
-    gm_z = _ws_z(gm, peers.gross_margin_median, peers.gross_margin_std) if gm is not None else None
-    gm_flag = (gm_z is not None) and (gm_z >= 2.0)
-    res.append(WSRuleResult("GM_OUTLIER","هامش إجمالي مرتفع بشكل غير اعتيادي","medium",gm_flag,gm,"z ≥ 2", f"GM={to_percent(gm)} z={('NA' if gm_z is None else f'{gm_z:.2f}')}"))
-
-    # OM
-    om_z = _ws_z(om, peers.op_margin_median, peers.op_margin_std) if om is not None else None
-    om_flag = (om_z is not None) and (om_z >= 2.0)
-    res.append(WSRuleResult("OM_OUTLIER","هامش تشغيلي مرتفع بشكل غير اعتيادي","medium",om_flag,om,"z ≥ 2", f"OM={to_percent(om)} z={('NA' if om_z is None else f'{om_z:.2f}')}"))
-    return res
-
-def ws_rule_q4_anomaly(df: pd.DataFrame) -> WSRuleResult:
-    title = "نمط ربع رابع غير اعتيادي"
-    severity = 'low'
-    if 'date' not in df.columns or df['date'].empty:
-        return WSRuleResult("Q4_ANOM", title, severity, False, None, None, "لا يوجد تاريخ")
-    rev = df[['date','revenue']].dropna()
-    if rev.empty:
-        return WSRuleResult("Q4_ANOM", title, severity, False, None, None, "لا توجد إيرادات")
-    rev = rev.copy()
-    rev['quarter'] = pd.to_datetime(rev['date']).dt.quarter
-    q4s = rev[rev['quarter'] == 4]['revenue'].astype(float)
-    others = rev[rev['quarter'] != 4]['revenue'].astype(float)
-    if len(q4s) < 2 or len(others) < 4:
-        return WSRuleResult("Q4_ANOM", title, severity, False, None, None, "بيانات غير كافية")
-    q4_mean, others_mean, others_std = q4s.mean(), others.mean(), others.std()
-    z = (q4_mean - others_mean) / (others_std if others_std != 0 else np.nan)
-    flagged = (not np.isnan(z)) and (abs(z) >= 2.0)
-    rationale = f"z={z:.2f} (Q4 مقابل بقية الفصول)"
-    return WSRuleResult("Q4_ANOM", title, severity, flagged, float(z) if not np.isnan(z) else None, "|z| ≥ 2", rationale)
-
-def ws_rule_disclosures(text: str) -> List[WSRuleResult]:
-    items = [
-        ("REV_METHODS","تغيّر طرق الاعتراف بالإيراد","high",'rev_change_methods'),
-        ("BILL_HOLD","استخدام bill-and-hold","high",'bill_and_hold'),
-        ("BARTER","معاملات مقايضة","high",'barter'),
-        ("REBATES","برامج حسومات معقّدة","medium",'rebates'),
-        ("RELATED","تعاملات مع أطراف ذات علاقة","high",'related_party'),
-        ("NON_GAAP","تركيز مبالغ على Non-GAAP","medium",'non_gaap_push'),
-        ("NONREC","بنود غير متكررة تتكرر","medium",'nonrecurring'),
-        ("LIFO_LIQ","مؤشرات LIFO liquidation","medium",'lifo_reserve'),
-        ("CAP_DEV","رسملة تكاليف تطوير/برمجيات","medium",'capitalized_dev'),
-    ]
-    out=[]
-    for rid, title, severity, key in items:
-        found = ws_search_disclosures(text, key)
-        out.append(WSRuleResult(rid, title, severity, bool(found), None, "وجود إشارة بالإفصاح", f"match={found}"))
-    return out
-
-def ws_aggregate(results: List[WSRuleResult]) -> Tuple[int, pd.DataFrame]:
-    penalty = 0
-    rows=[]
-    for r in results:
-        w = _WS_SEVERITY_WEIGHT.get(r.severity,1)
-        pen = (10 * w) if r.flagged else 0
-        penalty += pen
-        rows.append({
-            "rule_id": r.rule_id,
-            "العنوان": r.title,
-            "الخطورة": r.severity,
-            "Flag": r.flagged,
-            "القيمة": r.metric_value,
-            "الحد": r.threshold,
-            "التبرير": r.rationale,
-            "Penalty": pen
-        })
-    score = int(max(0, 100 - penalty))
-    return score, pd.DataFrame(rows)
-
-def ws_run_all_checks(df_financials: pd.DataFrame, peers: WSPeerStats, disclosures_text: str = "") -> Dict[str, Any]:
-    results: List[WSRuleResult] = []
-    results.append(ws_rule_revenue_outlier_vs_peers(df_financials, peers))
-    results.append(ws_rule_receivables_turnover_decline(df_financials))
-    results.append(ws_rule_asset_turnover_down_with_acq(df_financials))
-    results.append(ws_rule_other_income_in_revenue(df_financials))
-    results.append(ws_rule_inventory_turnover_decline(df_financials))
-    results.append(ws_rule_cfo_ni_ratio(df_financials))
-    results.extend(ws_rule_margins_outlier_vs_peers(df_financials, peers))
-    results.append(ws_rule_q4_anomaly(df_financials))
-    if disclosures_text:
-        results.extend(ws_rule_disclosures(disclosures_text))
-
-    score, df = ws_aggregate(results)
-    summary = {
-        'ManipulationRiskScore': score,  # 0 (خطر عالي) ← 100 (مطمئن)
-        'flags_count': int(df['Flag'].sum()),
-        'high_flags': int(((df['الخطورة']=='high') & (df['Flag'])).sum()),
-        'medium_flags': int(((df['الخطورة']=='medium') & (df['Flag'])).sum()),
-        'low_flags': int(((df['الخطورة']=='low') & (df['Flag'])).sum()),
-    }
-    return {'summary': summary, 'details': df.sort_values(['Flag','الخطورة'], ascending=[False, True])}
-
-def ws_build_peers_from_symbols(symbols: List[str], suffix: str, mode: str) -> WSPeerStats:
-    """نستخرج إحصائيات أقران بسيطة من الرموز المُدخلة (median/std)."""
-    cagr_list=[]; gm_list=[]; om_list=[]; at_list=[]
-    for c in symbols[:10]:
-        try:
-            cc = c if (suffix=="" or c.endswith(".SR")) else c+suffix
-            d = load_company_data(cc)
-            # CAGR إيرادات من السنوي
-            inc = d["inc_a"]
-            cols = sorted_cols(inc)
-            if len(cols)>=2:
-                first = find_any(inc, REV_KEYS, cols[-2])
-                last  = find_any(inc, REV_KEYS, cols[-1])
-                years = 1.0
-                if len(cols)>=4:
-                    first = find_any(inc, REV_KEYS, cols[3])
-                    last  = find_any(inc, REV_KEYS, cols[0])
-                    years = 3.0
-                if first and first>0 and last and last>0:
-                    cagr_list.append((last/first)**(1/years)-1)
-            # هوامش + دوران أصول من core metrics
-            rr = compute_core_metrics(d, mode)
-            if not pd.isna(rr["GrossMargin"]): gm_list.append(float(rr["GrossMargin"]))
-            if not pd.isna(rr["OperatingMargin"]): om_list.append(float(rr["OperatingMargin"]))
-            if not pd.isna(rr["AssetTurnover"]): at_list.append(float(rr["AssetTurnover"]))
-        except Exception:
-            pass
-    def medstd(v):
-        v = [x for x in v if not pd.isna(x)]
-        if not v: return (np.nan, np.nan)
-        return (float(np.nanmedian(v)), float(np.nanstd(v, ddof=0)))
-    c_med, c_std = medstd(cagr_list)
-    gm_med, gm_std = medstd(gm_list)
-    om_med, om_std = medstd(om_list)
-    at_med, at_std = medstd(at_list)
-    return WSPeerStats(
-        revenue_cagr_median=c_med, revenue_cagr_std=c_std,
-        gross_margin_median=gm_med, gross_margin_std=gm_std,
-        op_margin_median=om_med, op_margin_std=om_std,
-        asset_turnover_median=at_med, asset_turnover_std=at_std
-    )
-
-def ws_section_md(ws_out: Dict[str,Any]) -> str:
-    if not ws_out or "summary" not in ws_out: return ""
-    s=ws_out["summary"]; df=ws_out["details"]
-    top_flags = df[df["Flag"]==True][["العنوان","الخطورة","التبرير"]].head(6).values.tolist() if isinstance(df,pd.DataFrame) else []
-    tbl = md_table(["المؤشر","الخطورة","التبرير"], top_flags) if top_flags else "_لا توجد أعلام بارزة._"
-    lines = [
-        "## 12) مؤشرات إنذار/تلاعب (WS)",
-        f"- **درجة المخاطر (0=خطر، 100=مطمئن):** {s['ManipulationRiskScore']}",
-        f"- High/Med/Low: {s['high_flags']}/{s['medium_flags']}/{s['low_flags']}",
-        "", tbl
-    ]
-    return "\n".join(lines)
-
-# =============================
 # نصوص مساعدة للتقرير
 # =============================
 def executive_summary(sym, info, r, score, verdict, dcf_value_ps, price):
@@ -875,7 +521,7 @@ def company_overview(info):
     return "\n".join(parts)
 
 def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, components, mode, trend_df,
-                    dcf_table, base_ps, best_ps, worst_ps, comps_rows, data, ws_md_section: str = ""):
+                    dcf_table, base_ps, best_ps, worst_ps, comps_rows, data):
     # ترويسة ومعلومات عامة
     currency = info.get("financialCurrency") or info.get("currency") or "—"
     meta = r.get("_meta", {})
@@ -1009,6 +655,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         recs.append("لا توجد توصيات تشغيلية مُلحة استنادًا للبيانات المتاحة.")
     recs_md = "\n".join([f"- {x}" for x in recs])
 
+    # 11) ملاحق: المنهجية + مسرد
     appendix = """
 **المنهجية (مختصر):**
 - تم الاعتماد على Yahoo Finance عبر yfinance وقد تختلف تسمية البنود بين الشركات.
@@ -1023,8 +670,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
 - **OE**: أرباح المالك = OCF – Capex.
 - **CCC**: دورة التحويل النقدي = DSO + DIO – DPO (أقل أفضل).
 - **OE Yield**: OE / القيمة السوقية (كلما أعلى كان أفضل).
-
-**المعاملات بالمقايضة (Barter):** تبادل سلع/خدمات بدون نقد؛ قد تضخّم الإيرادات المحاسبية إن ذُكرت دون تدفق نقدي مقابل.
 """
 
     # تجميع كل الأقسام
@@ -1061,16 +706,15 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         "",
         "## 11) الملاحق",
         appendix.strip(),
+        "",
+        "_المصدر: Yahoo Finance عبر yfinance. هذا التقرير لأغراض تعليمية/بحثية وليس توصية استثمارية._"
     ]
-    if ws_md_section:
-        sections += ["", ws_md_section]
-    sections += ["", "_المصدر: Yahoo Finance عبر yfinance. هذا التقرير لأغراض تعليمية/بحثية وليس توصية استثمارية._"]
     return "\n".join(sections)
 
 # =============================
 # واجهة المستخدم
 # =============================
-st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت) + مؤشرات إنذار (WS)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل للتحميل + نظام كشف تحذيرات جودة الأرباح/التلاعب</div></div>", unsafe_allow_html=True)
+st.markdown("<div class='hero'><h1>📊 نموذج التحليل المالي (مستلهَم من مبادئ بافيت)</h1><div class='muted'>واجهة محسّنة + تقرير Markdown مفصل للتحميل</div></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     market = st.selectbox("السوق", ["السوق الأمريكي", "السوق السعودي (.SR)"])
@@ -1119,13 +763,6 @@ if st.button("🚀 تحليل الشركة"):
         best_ps = (best_total/r["Shares"]) if (not pd.isna(best_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
         worst_ps= (worst_total/r["Shares"]) if (not pd.isna(worst_total) and not pd.isna(r["Shares"]) and r["Shares"]>0) else np.nan
 
-        # === WS: peers + timeseries + run checks ===
-        comps_raw = [c.strip().upper() for c in comps_input.replace("\n"," ").split() if c.strip()]
-        ws_peers = ws_build_peers_from_symbols(comps_raw, suffix, mode) if comps_raw else WSPeerStats()
-        df_fin_ts = ws_build_financials_ts(data, max_points=12)
-        disclosures_text = (data.get("info", {}) or {}).get("longBusinessSummary","") or ""
-        ws_out = ws_run_all_checks(df_fin_ts, ws_peers, disclosures_text)
-
     # ======== KPIs ========
     st.markdown("### المؤشرات الرئيسية")
     cc1, cc2, cc3, cc4 = st.columns(4)
@@ -1142,23 +779,13 @@ if st.button("🚀 تحليل الشركة"):
     with dd3: st.markdown(kpi_card("تغطية الفوائد", to_ratio(r["InterestCoverage"]), "≥10x آمن", classify(r["InterestCoverage"], ok=10, mid=6)), unsafe_allow_html=True)
     with dd4: st.markdown(kpi_card("OE Yield", to_percent(r["OwnerEarningsYield"]), "≥6% معقول", classify(r["OwnerEarningsYield"], ok=0.06, mid=0.04)), unsafe_allow_html=True)
 
-    # WS KPI
-    st.markdown("### مؤشرات الإنذار (WS)")
-    w1, w2, w3, w4 = st.columns(4)
-    ws_sum = ws_out["summary"]
-    with w1: st.markdown(kpi_card("WS Risk Score", str(ws_sum["ManipulationRiskScore"]), "0=خطر عالي • 100=اطمئنان", ("ok" if ws_sum["ManipulationRiskScore"]>=80 else ("mid" if ws_sum["ManipulationRiskScore"]>=60 else "bad"))), unsafe_allow_html=True)
-    with w2: st.markdown(kpi_card("High Flags", str(ws_sum["high_flags"]), "أعلام خطرة", ("bad" if ws_sum["high_flags"]>0 else "ok")), unsafe_allow_html=True)
-    with w3: st.markdown(kpi_card("Medium Flags", str(ws_sum["medium_flags"]), "أعلام متوسطة", ("mid" if ws_sum["medium_flags"]>0 else "ok")), unsafe_allow_html=True)
-    with w4: st.markdown(kpi_card("Low Flags", str(ws_sum["low_flags"]), "أعلام منخفضة", "ok"), unsafe_allow_html=True)
-
     st.write("**درجة بافيت:** ", f"{score:.0f}/100 — {verdict}")
     st.progress(min(max(int(score), 0), 100)/100)
 
     # ======== تبويبات ========
     tabs = st.tabs([
         "1) ملخص تنفيذي", "2) نظرة عامة", "3) القوائم (BS/IS/CF)",
-        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات",
-        "9) الأسباب/التحقق", "10) تقرير للتنزيل", "11) مؤشرات إنذار/تلاعب"
+        "4) النسب", "5) الاتجاهات", "6) المخاطر", "7) التقييم", "8) مقارنات", "9) الأسباب/التحقق", "10) تقرير للتنزيل"
     ])
 
     with tabs[0]:
@@ -1168,7 +795,7 @@ if st.button("🚀 تحليل الشركة"):
     with tabs[1]:
         st.markdown(company_overview(data.get("info", {})))
 
-    with tabs[2]]:
+    with tabs[2]:
         cA, cB = st.columns(2)
         with cA:
             st.markdown("### قائمة الدخل")
@@ -1244,6 +871,7 @@ if st.button("🚀 تحليل الشركة"):
             st.info("لا يمكن حساب DCF (تحقق من r>gₜ و OE>0).")
 
     with tabs[7]:
+        comps_raw = [c.strip().upper() for c in comps_input.replace("\n"," ").split() if c.strip()]
         comps_rows = []
         if comps_raw:
             with st.spinner("جاري جلب المقارنات..."):
@@ -1276,22 +904,13 @@ if st.button("🚀 تحليل الشركة"):
 
     with tabs[9]:
         comps_rows = st.session_state.get("_comps_rows", [])
-        ws_md = ws_section_md(ws_out)
         report_md = build_report_md(
             sym, data.get("info", {}), r, score, verdict, dcf_per_share, r["Price"], reasons, components,
-            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data, ws_md_section=ws_md
+            mode, trend_df, dcf_table, dcf_per_share, best_ps, worst_ps, comps_rows, data
         )
         st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
                            file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
-        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، WS إنذارات.")
-
-    with tabs[10]:
-        st.markdown("#### ملخص مؤشرات الإنذار (WS)")
-        st.write(f"**WS Risk Score:** {ws_sum['ManipulationRiskScore']} — High/Med/Low: {ws_sum['high_flags']}/{ws_sum['medium_flags']}/{ws_sum['low_flags']}")
-        st.dataframe(ws_out["details"], use_container_width=True)
-        with st.expander("ما هي المعاملات بالمقايضة؟"):
-            st.markdown("- **المقايضة (Barter):** تبادل سلع/خدمات بدون نقد. قد ترفع الإيرادات المحاسبية دون دعم نقدي موازٍ.")
-        st.caption("ملاحظة: قواعد WS لا تعني وجود تلاعب بالضرورة؛ هي إشارات تحتاج تدقيق إضافي (DD).")
+        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، وملاحق.")
 # دليل مبسّط
 with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
     st.markdown("""
@@ -1299,6 +918,5 @@ with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
 - **OCF/NI**: جودة الأرباح؛ ≥1.0 يعني أن النقد يدعم الربح المحاسبي.
 - **CCC**: زمن دورة النقد؛ أقل أفضل.
 - **OE Yield**: أرباح المالك/القيمة السوقية؛ مقياس لعائد ضمني.
-- **WS Risk Score**: درجة مخاطر التلاعب/الجودة (0=خطر عالي، 100=اطمئنان). تزداد المخاطر بوجود Bill-and-Hold، Barter، تضخم Other Income، تدهور دوران الذمم/المخزون، إلخ.
 - **DCF مبسّط**: تقدير أولي للقيمة الجوهرية اعتمادًا على OE وافتراضات محافظة.
 """)
