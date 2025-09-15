@@ -3,7 +3,7 @@
 📊 Financial Analysis Model (Buffett Principles) — v3 (Detailed Report) + WS
 ملف واحد — تحليل مالي شامل + تقرير Markdown مفصل + نظام إنذارات تلاعب/جودة أرباح (WS).
 تشغيل: streamlit run app.py
-اعتماديات: streamlit, yfinance, pandas, numpy, dataclasses
+اعتماديات: streamlit, yfinance, pandas, numpy
 """
 
 import re
@@ -174,7 +174,7 @@ CAPEX_KEYS = ["Capital Expenditure","Capital Expenditures"]
 OTHER_INC_KEYS = ["Other Income Expense","Total Other Income/Expenses Net","Other Non Operating Income (Expense)"]
 GOODWILL_KEYS  = ["Goodwill"]
 INTANG_KEYS    = ["Intangible Assets","Other Intangible Assets"]
-ACQ_KEYS       = ["Acquisitions Net","Net Income From Continuing Ops Net Minority Interest","Net Acquisition"]  # الأول هو الصحيح غالباً
+ACQ_KEYS       = ["Acquisitions Net"]  # الأكثر شيوعاً في Yahoo Cashflow
 
 # =============================
 # التحميل — كاش قابلة للتسلسل
@@ -245,6 +245,16 @@ def compute_ttm(inc_q, cf_q):
     cap = sum_last4(cf_q, CAPEX_KEYS)
     cogs = sum_last4(inc_q, COGS_KEYS)
     return rev, ebit, ni, ocf, cap, cogs
+
+# =============================
+# مساعد لاختيار آخر عمود حسب الوضع
+# =============================
+def _latest_col_label(mode: str, q_df: pd.DataFrame, a_df: pd.DataFrame) -> str:
+    if mode == "TTM" and not q_df.empty:
+        cols = sorted_cols(q_df)
+    else:
+        cols = sorted_cols(a_df)
+    return str(cols[0]) if cols else "—"
 
 # =============================
 # حساب المؤشرات الجوهرية
@@ -359,11 +369,11 @@ def compute_core_metrics(data: dict, mode: str):
     oe_yield = safe_div(owner_earnings, market_cap)
     p_to_oe  = safe_div(market_cap, owner_earnings)
 
-    # تواريخ آخر فترات
+    # فترات آخر تحديث (تصحيح الأقواس)
     meta = {
-        "income_period": (str(sorted_cols(inc_q)[0]) if (mode=="TTM" and not inc_q.empty) else (str(sorted_cols(inc_a)[0]) if not inc_a.empty else "—"))),
-        "balance_period": (str(sorted_cols(bal_q)[0]) if (mode=="TTM" and not bal_q.empty) else (str(sorted_cols(bal_a)[0]) if not bal_a.empty else "—"))),
-        "cashflow_period": (str(sorted_cols(cf_q)[0]) if (mode=="TTM" and not cf_q.empty) else (str(sorted_cols(cf_a)[0]) if not cf_a.empty else "—"))),
+        "income_period": _latest_col_label(mode, inc_q, inc_a),
+        "balance_period": _latest_col_label(mode, bal_q, bal_a),
+        "cashflow_period": _latest_col_label(mode, cf_q, cf_a),
     }
 
     return {
@@ -388,7 +398,7 @@ def buffett_scorecard(r):
     score = 0
     flags = {}
     reasons = []
-    components = []  # جديد: تفصيل النقاط
+    components = []  # تفصيل النقاط
 
     def set_flag(name, ok, mid=False, points_ok=10, points_mid=5, points_bad=0, explain=""):
         nonlocal score
@@ -584,7 +594,7 @@ def ws_build_financials_ts(data: dict, max_points: int = 12) -> pd.DataFrame:
         intang  = find_any(bal_src, INTANG_KEYS, c)
 
         cfo     = find_any(cf_src, OCF_KEYS, c)
-        acq     = find_any(cf_src, ACQ_KEYS, c)  # غالباً سالبة عند الاستحواذ
+        acq     = find_any(cf_src, ACQ_KEYS, c)  # سالبة عند الاستحواذ
 
         rows.append({
             "date": str(c),
@@ -609,7 +619,6 @@ def ws_rule_revenue_outlier_vs_peers(df: pd.DataFrame, peers: WSPeerStats, years
     severity = 'high'
     if df['revenue'].dropna().empty:
         return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, None, None, "لا توجد بيانات كافية")
-    # تقدير CAGR على آخر ~3 سنوات (12 ربع ≈ 3 سنوات إن توفر)
     series = df['revenue'].dropna().astype(float)
     if len(series) < 5:
         return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, None, None, "بيانات قليلة لحساب CAGR")
@@ -619,8 +628,8 @@ def ws_rule_revenue_outlier_vs_peers(df: pd.DataFrame, peers: WSPeerStats, years
         cagr = (last/first)**(1.0/yrs) - 1.0 if first>0 else np.nan
     except Exception:
         cagr = np.nan
-    if pd.isna(cagr) or pd.isna(peers.revenue_cagr_median):
-        return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, cagr, None, "بدون أقران/إنحراف معياري")
+    if pd.isna(cagr) or pd.isna(peers.revenue_cagr_median) or pd.isna(peers.revenue_cagr_std):
+        return WSRuleResult("REV_PEER_OUTLIER", title, severity, False, cagr, None, "بدون مرجع أقران")
     z = _ws_z(cagr, peers.revenue_cagr_median, peers.revenue_cagr_std)
     flagged = (z is not None) and (abs(z) >= 2.0)
     return WSRuleResult("REV_PEER_OUTLIER", title, severity, flagged, cagr, "|z| ≥ 2", f"CAGR={cagr:.2%}, z={z:.2f}")
@@ -656,7 +665,7 @@ def ws_rule_other_income_in_revenue(df: pd.DataFrame) -> WSRuleResult:
     ratio = (oi.rolling(4, min_periods=1).sum()) / (rev.rolling(4, min_periods=1).sum().replace(0, np.nan))
     val = float(ratio.iloc[-1]) if not ratio.dropna().empty else np.nan
     flagged = (not np.isnan(val)) and (val >= 0.05)
-    rationale = f"other_income/ revenue (TTM) = {val:.2%}" if not np.isnan(val) else "غير متاح"
+    rationale = f"other_income/revenue (TTM) = {val:.2%}" if not np.isnan(val) else "غير متاح"
     return WSRuleResult("OTHER_IN_REV", title, severity, flagged, val, "≥ 5%", rationale)
 
 def ws_rule_inventory_turnover_decline(df: pd.DataFrame) -> WSRuleResult:
@@ -698,12 +707,10 @@ def ws_rule_margins_outlier_vs_peers(df: pd.DataFrame, peers: WSPeerStats) -> Li
     except Exception:
         pass
 
-    # GM
     gm_z = _ws_z(gm, peers.gross_margin_median, peers.gross_margin_std) if gm is not None else None
     gm_flag = (gm_z is not None) and (gm_z >= 2.0)
     res.append(WSRuleResult("GM_OUTLIER","هامش إجمالي مرتفع بشكل غير اعتيادي","medium",gm_flag,gm,"z ≥ 2", f"GM={to_percent(gm)} z={('NA' if gm_z is None else f'{gm_z:.2f}')}"))
 
-    # OM
     om_z = _ws_z(om, peers.op_margin_median, peers.op_margin_std) if om is not None else None
     om_flag = (om_z is not None) and (om_z >= 2.0)
     res.append(WSRuleResult("OM_OUTLIER","هامش تشغيلي مرتفع بشكل غير اعتيادي","medium",om_flag,om,"z ≥ 2", f"OM={to_percent(om)} z={('NA' if om_z is None else f'{om_z:.2f}')}"))
@@ -797,12 +804,11 @@ def ws_build_peers_from_symbols(symbols: List[str], suffix: str, mode: str) -> W
         try:
             cc = c if (suffix=="" or c.endswith(".SR")) else c+suffix
             d = load_company_data(cc)
-            # CAGR إيرادات من السنوي
             inc = d["inc_a"]
             cols = sorted_cols(inc)
             if len(cols)>=2:
-                first = find_any(inc, REV_KEYS, cols[-2])
-                last  = find_any(inc, REV_KEYS, cols[-1])
+                first = find_any(inc, REV_KEYS, cols[-1])
+                last  = find_any(inc, REV_KEYS, cols[0])
                 years = 1.0
                 if len(cols)>=4:
                     first = find_any(inc, REV_KEYS, cols[3])
@@ -810,7 +816,6 @@ def ws_build_peers_from_symbols(symbols: List[str], suffix: str, mode: str) -> W
                     years = 3.0
                 if first and first>0 and last and last>0:
                     cagr_list.append((last/first)**(1/years)-1)
-            # هوامش + دوران أصول من core metrics
             rr = compute_core_metrics(d, mode)
             if not pd.isna(rr["GrossMargin"]): gm_list.append(float(rr["GrossMargin"]))
             if not pd.isna(rr["OperatingMargin"]): om_list.append(float(rr["OperatingMargin"]))
@@ -876,7 +881,6 @@ def company_overview(info):
 
 def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, components, mode, trend_df,
                     dcf_table, base_ps, best_ps, worst_ps, comps_rows, data, ws_md_section: str = ""):
-    # ترويسة ومعلومات عامة
     currency = info.get("financialCurrency") or info.get("currency") or "—"
     meta = r.get("_meta", {})
     header = [
@@ -891,7 +895,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         company_overview(info),
     ]
 
-    # 3) تحليل القوائم
     bs_tbl = md_table(
         ["البند","القيمة"],
         [
@@ -925,7 +928,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 4) نسب مالية مع شرح
     ratios_tbl = md_table(
         ["الفئة","النسبة","تفسير سريع"],
         [
@@ -933,7 +935,7 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
             ["الربحية: Net", to_percent(r["NetMargin"]), "صافي هامش الربح النهائي."],
             ["ROA", to_percent(r["ROA"]), "عائد على الأصول."],
             ["ROE", to_percent(r["ROE"]), "عائد على حقوق الملكية."],
-            ["ROIC", to_percent(r["ROIC"]), "عائد على رأس المال المستثمر (مفتاح بافيت)."],
+            ["ROIC", to_percent(r["ROIC"]), "عائد على رأس المال المستثمر."],
             ["السيولة: Current", to_ratio(r["CurrentRatio"]), "قدرة تغطية الخصوم الجارية."],
             ["السيولة: Quick", to_ratio(r["QuickRatio"]), "سيولة أكثر تحفظاً."],
             ["المديونية: D/E", to_ratio(safe_div(r["TotalDebt"], r["TotalEquity"])), "كلما أقل كان أفضل."],
@@ -949,7 +951,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 5) اتجاهات (ملخص نصي)
     trend_lines = []
     if isinstance(trend_df, pd.DataFrame) and not trend_df.empty:
         def dir_txt(series):
@@ -962,14 +963,12 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         trend_lines.append(f"- أرباح المالك: {dir_txt(trend_df.loc['OwnerEarnings'])}")
     trends_section = "\n".join(trend_lines) if trend_lines else "لا تتوفر بيانات تاريخية كافية."
 
-    # 6) قائمة تحقق بافيت — جدول نقاط + تبرير
     comp_rows = [[c["البند"], c["الرمز"], c["النقاط"], c["التفسير"]] for c in components]
     buffett_tbl = md_table(["البند","التقييم","النقاط","المبررات"], comp_rows)
 
-    # 7) تقييم (DCF) + حساسية
     dcf_rows = dcf_table.to_dict("records") if isinstance(dcf_table, pd.DataFrame) and not dcf_table.empty else []
     dcf_md = md_table(["السنة","التدفق المتوقع","القيمة الحالية"],
-                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات (تحقق من المدخلات)."
+                      [[str(rw["السنة"]), to_num(rw["التدفق المتوقع"]), to_num(rw["القيمة الحالية"])] for rw in dcf_rows]) if dcf_rows else "لا تتوفر تفاصيل التدفقات."
 
     sens_tbl = md_table(
         ["السيناريو","القيمة الجوهرية/سهم"],
@@ -980,7 +979,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
         ]
     )
 
-    # 8) مقارنات (إن وُجدت)
     comps_md = ""
     if comps_rows:
         comps_md = md_table(
@@ -988,7 +986,6 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
             [[row["الرمز"], row["P/E"], row["P/B"], row["ROE"], row["ROIC"], row["هامش صافي"]] for row in comps_rows]
         )
 
-    # 9) مخاطر + 10) توصيات
     risks = []
     if not pd.isna(r["CurrentRatio"]) and r["CurrentRatio"]<1.0: risks.append("سيولة جارية ضعيفة (<1.0).")
     if not pd.isna(r["InterestCoverage"]) and r["InterestCoverage"]<6.0: risks.append("تغطية فوائد منخفضة (<6x).")
@@ -1014,20 +1011,12 @@ def build_report_md(sym, info, r, score, verdict, dcf_ps, price, reasons, compon
 - تم الاعتماد على Yahoo Finance عبر yfinance وقد تختلف تسمية البنود بين الشركات.
 - **TTM** = مجموع آخر 4 أرباع لقائمة الدخل/التدفق النقدي، وأحدث ميزانية متاحة.
 - **ROIC (تقريبي)** = NOPAT / (الدين + حقوق – النقد) حيث NOPAT ≈ EBIT×(1–الضريبة).
-- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط لا يفرّق Capex الصيانة/النمو).
-- حدود بافيت المستخدمَة عامة؛ قد تُعدّل حسب القطاع وطبيعة الأعمال.
+- **أرباح المالك (Owner Earnings)** ≈ OCF – Capex (تبسيط).
+- حدود بافيت عامة؛ قد تُعدّل حسب القطاع.
 
-**مسرد مختصر:**
-- **OCF**: التدفق النقدي التشغيلي.
-- **Capex**: الإنفاق الرأسمالي.
-- **OE**: أرباح المالك = OCF – Capex.
-- **CCC**: دورة التحويل النقدي = DSO + DIO – DPO (أقل أفضل).
-- **OE Yield**: OE / القيمة السوقية (كلما أعلى كان أفضل).
-
-**المعاملات بالمقايضة (Barter):** تبادل سلع/خدمات بدون نقد؛ قد تضخّم الإيرادات المحاسبية إن ذُكرت دون تدفق نقدي مقابل.
+**المعاملات بالمقايضة (Barter):** تبادل سلع/خدمات بدون نقد؛ قد تضخّم الإيرادات إن سُجلت دون تدفق نقدي مقابل.
 """
 
-    # تجميع كل الأقسام
     sections = []
     sections += header
     sections += [
@@ -1168,7 +1157,7 @@ if st.button("🚀 تحليل الشركة"):
     with tabs[1]:
         st.markdown(company_overview(data.get("info", {})))
 
-    with tabs[2]]:
+    with tabs[2]:
         cA, cB = st.columns(2)
         with cA:
             st.markdown("### قائمة الدخل")
@@ -1291,7 +1280,7 @@ if st.button("🚀 تحليل الشركة"):
         st.dataframe(ws_out["details"], use_container_width=True)
         with st.expander("ما هي المعاملات بالمقايضة؟"):
             st.markdown("- **المقايضة (Barter):** تبادل سلع/خدمات بدون نقد. قد ترفع الإيرادات المحاسبية دون دعم نقدي موازٍ.")
-        st.caption("ملاحظة: قواعد WS لا تعني وجود تلاعب بالضرورة؛ هي إشارات تحتاج تدقيق إضافي (DD).")
+        st.caption("ملاحظة: قواعد WS لا تعني وجود تلاعب بالضرورة؛ هي إشارات تحتاج تدقيق إضافي.")
 # دليل مبسّط
 with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
     st.markdown("""
