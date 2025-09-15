@@ -574,7 +574,7 @@ if st.button("🚀 قيّم الشركة"):
     with c1:
         st.markdown(f"<div class='kpi ok'><div class='title'>نموذج التدفق</div><div class='value'>{dcf_mode}</div><div class='small'>FCFF=للمنشأة • FCFE=للمساهم</div></div>", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"<div class='kpi {'ok' if base_fcf and base_fcf>0 else 'bad'}"><div class='title'>الـ FCF (TTM)</div><div class='value'>{_fmt_num(base_fcf)}</div><div class='small'>قاعدة الإسقاط</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi {'ok' if (base_fcf is not None and not pd.isna(base_fcf) and base_fcf>0) else 'bad'}'><div class='title'>الـ FCF (TTM)</div><div class='value'>{_fmt_num(base_fcf)}</div><div class='small'>قاعدة الإسقاط</div></div>", unsafe_allow_html=True)
     with c3:
         st.markdown(f"<div class='kpi mid'><div class='title'>معدل الخصم</div><div class='value'>{_fmt_pct(disc)}</div><div class='small'>{'WACC' if dcf_mode=='FCFF' else 'Cost of Equity (CAPM)'}</div></div>", unsafe_allow_html=True)
     with c4:
