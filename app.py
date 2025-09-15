@@ -369,7 +369,7 @@ def compute_core_metrics(data: dict, mode: str):
     oe_yield = safe_div(owner_earnings, market_cap)
     p_to_oe  = safe_div(market_cap, owner_earnings)
 
-    # فترات آخر تحديث (تصحيح الأقواس)
+    # فترات آخر تحديث
     meta = {
         "income_period": _latest_col_label(mode, inc_q, inc_a),
         "balance_period": _latest_col_label(mode, bal_q, bal_a),
@@ -572,11 +572,11 @@ def ws_search_disclosures(text: str, key: str) -> bool:
 
 def ws_build_financials_ts(data: dict, max_points: int = 12) -> pd.DataFrame:
     """يبني DataFrame زمني لفصول حديثة (حتى 12 ربع) مع الحقول اللازمة لقواعد WS."""
-    inc_q, bal_q, cf_q = data["inc_q"], data["bal_q"], data["cf_q"]
+    inc_q, bal_q, cf_q = data["inc_q"], data["cf_q"], data["cf_q"]
     # fallback سنوي لو مافيه ربعي
-    inc_src = inc_q if not inc_q.empty else data["inc_a"]
-    bal_src = bal_q if not bal_q.empty else data["bal_a"]
-    cf_src  = cf_q  if not cf_q.empty  else data["cf_a"]
+    inc_src = data["inc_q"] if not data["inc_q"].empty else data["inc_a"]
+    bal_src = data["bal_q"] if not data["bal_q"].empty else data["bal_a"]
+    cf_src  = data["cf_q"] if not data["cf_q"].empty else data["cf_a"]
 
     cols = sorted_cols(inc_src)[:max_points] if not inc_src.empty else []
     rows = []
@@ -849,6 +849,33 @@ def ws_section_md(ws_out: Dict[str,Any]) -> str:
         "", tbl
     ]
     return "\n".join(lines)
+
+# === شرح مبسّط لمؤشرات الإنذار (WS) — جديد ===
+def ws_explainer_md() -> str:
+    return """
+**تعريفات سريعة لمؤشرات الإنذار (WS):**
+
+- **REV_METHODS — تغيّر طرق الاعتراف بالإيراد:** تغيير السياسة قد يوحي بإدارة أرباح؛ راجع الإيضاحات المحاسبية.
+- **BILL_HOLD — Bill-and-Hold:** تسجيل مبيعات قبل التسليم الفعلي؛ قد يضخّم الإيرادات مؤقتًا.
+- **BARTER — معاملات مقايضة:** تبادل سلع/خدمات بلا نقد؛ انتبه لإيرادات بلا تدفّق نقدي مقابل.
+- **REBATES — برامج حسومات تقديرية:** تقديرات كبيرة قد تؤدي لعكس الإيرادات لاحقًا.
+- **RELATED — أطراف ذات علاقة:** صفقات مع جهات تابعة للإدارة قد تُشوه السعر العادل.
+- **NON_GAAP — تركيز مفرط على الأرقام المعدّلة:** قد يخفي ضعف الربحية وفق المعايير (GAAP).
+- **NONREC — بنود غير متكررة تتكرر:** “غير متكرر” لكنه يظهر دوريًا ⇒ ليس غير متكرر فعليًا.
+- **LIFO_LIQ — تصفية مخزون تحت LIFO:** قد ترفع أرباح الفترة مؤقتًا (U.S. GAAP).
+- **CAP_DEV — رسملة تطوير/برمجيات:** تحويل مصروفات إلى أصول يرفع أرباح الفترة الحالية.
+
+- **AR_TURN_DECLINE — تدهور دوران الذمم المدينة:** تحصيل أبطأ ⇒ جودة مبيعات أضعف.
+- **INV_TURN_DECLINE — تدهور دوران المخزون:** مخزون أبطأ/تقادم أعلى ⇒ مخاطر خصومات لاحقة.
+- **ASSET_TURN_ACQ — هبوط دوران الأصول مع الاستحواذ:** توسّع دون كفاءة تشغيلية واضحة.
+- **OTHER_IN_REV — بنود غير تشغيلية ضمن الإيراد:** أرباح لا تُعاد بالضرورة دوريًا.
+- **CFO_NI — نسبة CFO/NI < 1 أو تتدهور:** الأرباح الورقية لا يدعمها النقد التشغيلي.
+- **GM_OUTLIER / OM_OUTLIER — هوامش غير اعتيادية مقابل الأقران:** قد تعكس سياسات مختلفة أو دورة استثنائية.
+- **Q4_ANOM — شذوذ الربع الرابع:** نمط ربعي غير مبرر مقابل موسمية القطاع.
+
+**Legend:**  
+- **High/Medium/Low** = مستوى خطورة الإشارة. كثرة إشارات **High** تعني الحاجة لتدقيق وإفصاحات إضافية.
+"""
 
 # =============================
 # نصوص مساعدة للتقرير
@@ -1135,8 +1162,18 @@ if st.button("🚀 تحليل الشركة"):
     st.markdown("### مؤشرات الإنذار (WS)")
     w1, w2, w3, w4 = st.columns(4)
     ws_sum = ws_out["summary"]
-    with w1: st.markdown(kpi_card("WS Risk Score", str(ws_sum["ManipulationRiskScore"]), "0=خطر عالي • 100=اطمئنان", ("ok" if ws_sum["ManipulationRiskScore"]>=80 else ("mid" if ws_sum["ManipulationRiskScore"]>=60 else "bad"))), unsafe_allow_html=True)
-    with w2: st.markdown(kpi_card("High Flags", str(ws_sum["high_flags"]), "أعلام خطرة", ("bad" if ws_sum["high_flags"]>0 else "ok")), unsafe_allow_html=True)
+    with w1:
+        st.markdown(
+            kpi_card(
+                "WS Risk Score",
+                str(ws_sum["ManipulationRiskScore"]),
+                "0=خطر عالي • 100=اطمئنان",
+                ("ok" if ws_sum["ManipulationRiskScore"]>=80 else ("mid" if ws_sum["ManipulationRiskScore"]>=60 else "bad"))
+            ),
+            unsafe_allow_html=True
+        )
+        st.caption("دليل سريع: ≥80 مطمئن، 60–79 متوسط، <60 يحتاج تدقيق معمّق.")
+    with w2: st.markdown(kpi_card("High Flags", str(ws_sum["high_flags"]), "أعلام خطيرة", ("bad" if ws_sum["high_flags"]>0 else "ok")), unsafe_allow_html=True)
     with w3: st.markdown(kpi_card("Medium Flags", str(ws_sum["medium_flags"]), "أعلام متوسطة", ("mid" if ws_sum["medium_flags"]>0 else "ok")), unsafe_allow_html=True)
     with w4: st.markdown(kpi_card("Low Flags", str(ws_sum["low_flags"]), "أعلام منخفضة", "ok"), unsafe_allow_html=True)
 
@@ -1272,15 +1309,22 @@ if st.button("🚀 تحليل الشركة"):
         )
         st.download_button("📥 تنزيل التقرير المفصل (Markdown)", report_md.encode("utf-8"),
                            file_name=f"Detailed_Financial_Report_{sym}.md", mime="text/markdown")
-        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات)، اتجاهات، تقييم DCF، حساسية، مخاطر، توصيات، WS إنذارات.")
+        st.caption("يشمل: ملخص تنفيذي، نظرة عامة، تحليل القوائم، نسب مشروحة، بافيت (نقاط/مبررات), اتجاهات، DCF، حساسية، مخاطر، توصيات، WS إنذارات.")
 
+    # === تبويب مؤشرات الإنذار مع الشرح المبسّط — مُحدَّث
     with tabs[10]:
         st.markdown("#### ملخص مؤشرات الإنذار (WS)")
         st.write(f"**WS Risk Score:** {ws_sum['ManipulationRiskScore']} — High/Med/Low: {ws_sum['high_flags']}/{ws_sum['medium_flags']}/{ws_sum['low_flags']}")
         st.dataframe(ws_out["details"], use_container_width=True)
-        with st.expander("ما هي المعاملات بالمقايضة؟"):
+
+        with st.expander("📚 شرح مبسّط لمؤشرات الإنذار (WS)"):
+            st.markdown(ws_explainer_md())
+
+        with st.expander("ℹ️ ما هي المعاملات بالمقايضة؟"):
             st.markdown("- **المقايضة (Barter):** تبادل سلع/خدمات بدون نقد. قد ترفع الإيرادات المحاسبية دون دعم نقدي موازٍ.")
-        st.caption("ملاحظة: قواعد WS لا تعني وجود تلاعب بالضرورة؛ هي إشارات تحتاج تدقيق إضافي.")
+
+        st.caption("تنبيه: مؤشرات WS لا تثبت تلاعبًا بمفردها؛ هي إشارات تستلزم فحصًا تحليليًا وقراءة إيضاحات القوائم.")
+
 # دليل مبسّط
 with st.expander("ℹ️ ماذا تعني المؤشرات؟"):
     st.markdown("""
