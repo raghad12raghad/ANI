@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-📊 Financial Analysis — Matrix UI (Zero-Assumptions)
+📊 Financial Analysis — Matrix UI (Zero-Assumptions + Click-to-Explore)
 تشغيل: streamlit run app.py
 اعتماديات: streamlit, yfinance, pandas, numpy
 """
@@ -30,21 +30,26 @@ THEME_CSS = """
   .matrix-table th { background:#0ea5e9; color:#fff; font-weight:700; }
   .matrix-table tr:nth-child(even){ background:#f9fafb; }
   .matrix-table .k { text-align:right; width:24%; }
-  .matrix-table .d { text-align:right; width:40%; color:#334155;}
-  .matrix-table .v { text-align:center; width:16%; font-weight:700;}
-  .matrix-table .p { text-align:center; width:10%; font-weight:600; color:#475569;}
-  .matrix-table .chg { text-align:center; width:10%; font-weight:700;}
+  .matrix-table .d { text-align:right; width:38%; color:#334155;}
+  .matrix-table .v { text-align:center; width:14%; font-weight:700;}
+  .matrix-table .p { text-align:center; width:12%; font-weight:600; color:#475569;}
+  .matrix-table .chg { text-align:center; width:12%; font-weight:700;}
+
+  .chipwrap { display:flex; flex-wrap:wrap; gap:8px; }
+  .chipbtn { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e5e7eb;
+             background:#fff; font-size:12px; cursor:pointer; }
+  .chipbtn.active { border-color:#0ea5e9; color:#0ea5e9; font-weight:700; }
 </style>
 """
 st.markdown(THEME_CSS, unsafe_allow_html=True)
 st.markdown(
-    "<div class='hero'><h1>📊 مصفوفة المؤشرات — صفر افتراضات</h1>"
+    "<div class='hero'><h1>📊 مصفوفة المؤشرات — صفر افتراضات + استكشاف بالنقر</h1>"
     "<div class='muted'>كل القيم مباشرة من القوائم والسوق فقط. لا حدود، لا أحكام، لا DCF.</div></div>",
     unsafe_allow_html=True
 )
 
 # =============================
-# Utilities (فورمات فقط—بدون افتراضات)
+# Utilities (فورمات — بدون افتراضات)
 # =============================
 def normalize_idx(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
@@ -103,12 +108,10 @@ def arrow(v):
     return "▲" if v > 0 else "▼"
 
 def pct_change(cur, prev):
-    # تغيّر نسبي %
     if cur is None or prev is None or pd.isna(cur) or pd.isna(prev) or prev == 0: return None
     return (cur - prev) / abs(prev) * 100.0
 
 def pp_change(cur, prev):
-    # فرق نقاط مئوية (للنسيات)
     if cur is None or prev is None or pd.isna(cur) or pd.isna(prev): return None
     return (cur - prev) * 100.0
 
@@ -140,7 +143,7 @@ PBT_KEYS  = ["Income Before Tax","Pretax Income","Earnings Before Tax"]
 TAX_KEYS  = ["Income Tax Expense","Tax Provision","Provision For Income Taxes"]
 
 # =============================
-# تحميل البيانات (بدون افتراضات)
+# تحميل البيانات
 # =============================
 @st.cache_data(ttl=1800)
 def load_company_data(ticker: str):
@@ -184,7 +187,6 @@ def load_company_data(ticker: str):
     except Exception:
         pass
 
-    # لا نحسب أي شيء غير متاح.
     return {
         "inc_a": inc_a, "inc_q": inc_q, "bal_a": bal_a, "bal_q": bal_q,
         "cf_a": cf_a, "cf_q": cf_q, "price": price, "shares": shares,
@@ -192,68 +194,100 @@ def load_company_data(ticker: str):
     }
 
 # =============================
-# TTM (آخر 4 أرباع) بلا افتراضات
+# أدوات مساعدة للسلاسل الزمنية
 # =============================
-def sum_last4_offset(df: pd.DataFrame, keys, offset=0):
+def sum_last4_at(df: pd.DataFrame, keys, start_idx=0):
+    # يجمع 4 أرباع بدءاً من start_idx (الأعمدة مرتبة تنازلياً = أحدث أولاً)
     if df is None or df.empty: return np.nan
-    cols_all = sorted_cols(df)
-    cols = cols_all[offset:offset+4]
-    if len(cols) < 4: return np.nan
+    cols = sorted_cols(df)
+    if start_idx + 4 > len(cols): return np.nan
+    cols = cols[start_idx:start_idx+4]
     vals = [find_any(df, keys, c) for c in cols]
     vals = [v for v in vals if not pd.isna(v)]
     return sum(vals) if vals else np.nan
 
+def match_balance_col(bal_df: pd.DataFrame, target_col):
+    # حاول مطابقته بنفس التاريخ، وإلا اختر العمود الأقرب زمنياً
+    if bal_df is None or bal_df.empty or target_col is None:
+        return None
+    cols = sorted_cols(bal_df)
+    if target_col in cols:
+        return target_col
+    try:
+        t = pd.to_datetime(str(target_col))
+        diffs = [(abs(pd.to_datetime(str(c)) - t), c) for c in cols]
+        diffs.sort(key=lambda x: x[0])
+        return diffs[0][1] if diffs else None
+    except Exception:
+        return cols[0] if cols else None
+
 # =============================
-# حساب المؤشرات للفترة (أحدث/سابقة)
-# — لا افتراضات: أي عنصر ناقص => الناتج غير متاح
+# لقطة فترة واحدة (Series-aware)
 # =============================
-def compute_metrics_for_period(data: dict, mode: str, offset: int = 0):
+def snapshot_for_series(data: dict, mode: str, idx: int):
     inc_a, inc_q = data["inc_a"], data["inc_q"]
     bal_a, bal_q = data["bal_a"], data["bal_q"]
     cf_a,  cf_q  = data["cf_a"],  data["cf_q"]
 
     if mode == "TTM" and not inc_q.empty:
-        rev  = sum_last4_offset(inc_q, REV_KEYS, offset)
-        ebit = sum_last4_offset(inc_q, EBIT_KEYS, offset)
-        if pd.isna(ebit): ebit = sum_last4_offset(inc_q, OPINC_KEYS, offset)
-        ni   = sum_last4_offset(inc_q, NI_KEYS, offset)
-        ocf  = sum_last4_offset(cf_q, OCF_KEYS, offset)
-        capex= sum_last4_offset(cf_q, CAPEX_KEYS, offset)
-        cogs = sum_last4_offset(inc_q, COGS_KEYS, offset)
-        bal  = bal_q if not bal_q.empty else bal_a
-        bal_cols = sorted_cols(bal)
-        cur_col = bal_cols[0] if bal_cols else None
-        prev_col= bal_cols[1] if len(bal_cols)>1 else None
-        income_period = "TTM"
+        inc_cols = sorted_cols(inc_q)
+        if idx + 4 > len(inc_cols):  # غير كافٍ لحساب TTM
+            return None, None, {}
+        rev  = sum_last4_at(inc_q, REV_KEYS, idx)
+        ebit = sum_last4_at(inc_q, EBIT_KEYS, idx)
+        if pd.isna(ebit): ebit = sum_last4_at(inc_q, OPINC_KEYS, idx)
+        ni   = sum_last4_at(inc_q, NI_KEYS, idx)
+        ocf  = sum_last4_at(cf_q,  OCF_KEYS, idx)
+        capex= sum_last4_at(cf_q,  CAPEX_KEYS, idx)
+        cogs = sum_last4_at(inc_q, COGS_KEYS, idx)
+
+        cur_income_col = inc_cols[idx]  # نهاية نافذة TTM
+        bal_col = match_balance_col(bal_q if not bal_q.empty else bal_a, cur_income_col)
+        bal = bal_q if not bal_q.empty else bal_a
+
+        meta = {
+            "income_period": f"TTM حتى {str(cur_income_col)}",
+            "balance_period": str(bal_col) if bal_col is not None else "—",
+            "cashflow_period": f"TTM حتى {str(cur_income_col)}"
+        }
     else:
-        col_i = sorted_cols(inc_a)[offset] if not inc_a.empty and len(inc_a.columns)>offset else None
-        col_c = sorted_cols(cf_a)[offset]  if not cf_a.empty  and len(cf_a.columns)>offset  else None
+        inc_cols = sorted_cols(inc_a)
+        if idx >= len(inc_cols): return None, None, {}
+        col_i = inc_cols[idx]
+        cf_cols = sorted_cols(cf_a)
+        col_c = cf_cols[idx] if idx < len(cf_cols) else None
+
         rev  = find_any(inc_a, REV_KEYS, col_i)
         ebit = find_any(inc_a, EBIT_KEYS, col_i)
         if pd.isna(ebit): ebit = find_any(inc_a, OPINC_KEYS, col_i)
         ni   = find_any(inc_a, NI_KEYS, col_i)
-        ocf  = find_any(cf_a, OCF_KEYS, col_c)
-        capex= find_any(cf_a, CAPEX_KEYS, col_c)
+        ocf  = find_any(cf_a,  OCF_KEYS, col_c)
+        capex= find_any(cf_a,  CAPEX_KEYS, col_c)
         cogs = find_any(inc_a, COGS_KEYS, col_i)
-        bal  = bal_a
+
+        bal = bal_a
         bal_cols = sorted_cols(bal)
-        cur_col = bal_cols[offset] if len(bal_cols)>offset else None
-        prev_col= bal_cols[offset+1] if len(bal_cols)>(offset+1) else None
-        income_period = str(col_i) if col_i is not None else "—"
+        bal_col = bal_cols[idx] if idx < len(bal_cols) else None
+
+        meta = {
+            "income_period": str(col_i),
+            "balance_period": str(bal_col) if bal_col is not None else "—",
+            "cashflow_period": str(col_c) if col_c is not None else "—"
+        }
 
     # ميزانية
-    ta = find_any(bal, TA_KEYS, cur_col)
-    te = find_any(bal, TE_KEYS, cur_col)
-    ca = find_any(bal, CA_KEYS, cur_col)
-    cl = find_any(bal, CL_KEYS, cur_col)
-    inv = find_any(bal, INV_KEYS, cur_col)
-    cash = find_any(bal, CASH_KEYS, cur_col)
-    sti  = find_any(bal, STI_KEYS, cur_col)
+    ta = find_any(bal, TA_KEYS, bal_col)
+    te = find_any(bal, TE_KEYS, bal_col)
+    ca = find_any(bal, CA_KEYS, bal_col)
+    cl = find_any(bal, CL_KEYS, bal_col)
+    inv = find_any(bal, INV_KEYS, bal_col)
+    cash = find_any(bal, CASH_KEYS, bal_col)
+    sti  = find_any(bal, STI_KEYS, bal_col)
 
-    # الدين الإجمالي (من بند Total Debt، وإن غاب نحاول تجميع مكونات الدين—هذا ليس افتراضاً بل تجميع مباشر)
-    total_debt = find_any(bal, TOT_DEBT_KEYS, cur_col)
+    # دين
+    total_debt = find_any(bal, TOT_DEBT_KEYS, bal_col)
     if pd.isna(total_debt):
-        parts = [find_any(bal, ks, cur_col) for ks in (LTD_KEYS, SLTD_KEYS, CUR_DEBT_KEYS)]
+        parts = [find_any(bal, ks, bal_col) for ks in (LTD_KEYS, SLTD_KEYS, CUR_DEBT_KEYS)]
         parts = [x for x in parts if not pd.isna(x)]
         total_debt = sum(parts) if parts else np.nan
 
@@ -263,13 +297,13 @@ def compute_metrics_for_period(data: dict, mode: str, offset: int = 0):
     op_margin    = safe_div(ebit, rev)
     net_margin   = safe_div(ni, rev)
 
-    # ROA / ROE (مباشر)
+    # ROA/ROE
     roa = safe_div(ni, ta)
     roe = safe_div(ni, te)
 
-    # ROIC (بدون افتراض ضريبة): إن توفر كل من PBT والضرائب نحسب معدل الضريبة الفعّال، غير ذلك => غير متاح
+    # ROIC (بدون افتراضات)
     inc_used = inc_q if (mode=="TTM" and not inc_q.empty) else inc_a
-    col_income = sorted_cols(inc_used)[0] if not inc_used.empty else None
+    col_income = sorted_cols(inc_used)[idx] if idx < len(sorted_cols(inc_used)) else None
     pbt = find_any(inc_used, PBT_KEYS, col_income)
     tax_exp = find_any(inc_used, TAX_KEYS, col_income)
     eff_tax = np.nan
@@ -277,65 +311,23 @@ def compute_metrics_for_period(data: dict, mode: str, offset: int = 0):
         eff_tax = tax_exp / pbt
     nopat = np.nan if (pd.isna(ebit) or pd.isna(eff_tax)) else (ebit * (1 - eff_tax))
     invested = np.nan
-    # تعريف محدد (بدون افتراض): رأس المال المستثمر = TotalDebt + TotalEquity - Cash - STInvest
     if not any(pd.isna(x) for x in [total_debt, te, cash]):
         invested = total_debt + te - (cash if pd.isna(sti) else (cash + sti))
     roic = safe_div(nopat, invested)
 
-    # جودة الأرباح/التدفق الحر (تعريف مباشر)
+    # جودة الأرباح/التدفق الحر
     owner_earnings = np.nan if (pd.isna(ocf) or pd.isna(capex)) else (ocf - capex)
     ocf_ni = safe_div(ocf, ni)
     fcf_margin = safe_div(owner_earnings, rev)
 
-    # تغطية الفوائد (مباشر)
+    # الفوائد و CCC
     int_exp = find_any(inc_used, INT_EXP_KEYS, col_income)
     if not pd.isna(int_exp): int_exp = abs(int_exp)
     interest_cov = safe_div(ebit, int_exp)
 
-    # كفاءة رأس المال العامل + CCC
-    ar = find_any(bal, AR_KEYS, cur_col);  ar_prev  = find_any(bal, AR_KEYS, prev_col)
-    ap = find_any(bal, AP_KEYS, cur_col);  ap_prev  = find_any(bal, AP_KEYS, prev_col)
-    inv_prev = find_any(bal, INV_KEYS, prev_col)
-    ta_prev  = find_any(bal, TA_KEYS, prev_col)
-
-    avg_assets = np.nanmean([ta, ta_prev])
-    asset_turn = safe_div(rev, avg_assets)
-
-    ar_avg  = np.nanmean([ar, ar_prev])
-    ap_avg  = np.nanmean([ap, ap_prev])
-    inv_avg = np.nanmean([inv, inv_prev])
-
-    rec_turn = safe_div(rev, ar_avg)
-    pay_turn = safe_div(cogs if not pd.isna(cogs) else rev, ap_avg)
-    inv_turn = safe_div(cogs if not pd.isna(cogs) else rev, inv_avg)
-
-    dso = safe_div(365, rec_turn)
-    dpo = safe_div(365, pay_turn)
-    dio = safe_div(365, inv_turn)
-    ccc = dso + dio - dpo if not any(pd.isna(x) for x in [dso, dio, dpo]) else np.nan
-
-    # السوق/التقييم (مباشر)
-    price = data.get("price", np.nan)
-    shares = data.get("shares", np.nan)
-    market_cap = data.get("market_cap", np.nan)
-    eps = safe_div(ni, shares)
-    pe = safe_div(price, eps)
-    bvps = safe_div(te, shares)
-    pb = safe_div(price, bvps)
-    sales_ps = safe_div(rev, shares)
-    ps = safe_div(price, sales_ps)
-
-    if (pd.isna(market_cap) or market_cap == 0) and (not pd.isna(price) and not pd.isna(shares)):
-        market_cap = price * shares
-    oe_yield = safe_div(owner_earnings, market_cap)
-
-    meta = {
-        "income_period": income_period,
-        "balance_period": str(cur_col) if cur_col is not None else "—",
-        "cashflow_period": "TTM" if (mode=="TTM") else (str(sorted_cols(data["cf_a"])[offset]) if (not data["cf_a"].empty and len(data["cf_a"].columns)>offset) else "—"),
-    }
-
-    return {
+    # CCC (سلسلة: تحتاج نقطة سابقة لمتوسطات)
+    # سنحسبها خارجياً عبر لقطتين متتاليتين عند بناء السلسلة.
+    r = {
         "Revenue": rev, "COGS": cogs, "GrossProfit": gp, "EBIT": ebit, "NetIncome": ni,
         "TotalAssets": ta, "TotalEquity": te, "CurrentAssets": ca, "CurrentLiabilities": cl,
         "Inventory": inv, "Cash": cash, "STInvest": sti, "TotalDebt": total_debt,
@@ -345,107 +337,182 @@ def compute_metrics_for_period(data: dict, mode: str, offset: int = 0):
         "CurrentRatio": safe_div(ca, cl),
         "QuickRatio": safe_div((ca - (inv if not pd.isna(inv) else 0)), cl),
         "InterestCoverage": interest_cov,
-        "AssetTurnover": asset_turn, "DSO": dso, "DIO": dio, "DPO": dpo, "CCC": ccc,
-        "Price": price, "Shares": shares, "MarketCap": market_cap,
-        "PE": pe, "PB": pb, "PS": ps, "BVPS": bvps, "OE_Yield": oe_yield,
         "_meta": meta
     }
+    label = meta["income_period"]
+    return r, label, meta
 
 # =============================
-# بناء صفوف المصفوفة (بدون تقييمات)
+# تعريف البنود + دوال استخراج القيمة
 # =============================
-def build_matrix_rows(rcur: dict, rprev: dict):
-    rows = []
+METRICS = [
+    {"key":"DE",      "title":"هيكل المديونية (D/E)", "fmt":"ratio",   "value":lambda r: safe_div(r["TotalDebt"], r["TotalEquity"])},
+    {"key":"Current", "title":"السيولة الجارية (Current)", "fmt":"ratio", "value":lambda r: r["CurrentRatio"]},
+    {"key":"Quick",   "title":"السيولة السريعة (Quick)", "fmt":"ratio",  "value":lambda r: r["QuickRatio"]},
+    {"key":"GrossM",  "title":"الهامش الإجمالي",        "fmt":"percent","value":lambda r: r["GrossMargin"]},
+    {"key":"OpM",     "title":"هامش التشغيل",           "fmt":"percent","value":lambda r: r["OperatingMargin"]},
+    {"key":"NetM",    "title":"هامش صافي",              "fmt":"percent","value":lambda r: r["NetMargin"]},
+    {"key":"ROA",     "title":"ROA",                    "fmt":"percent","value":lambda r: r["ROA"]},
+    {"key":"ROE",     "title":"ROE",                    "fmt":"percent","value":lambda r: r["ROE"]},
+    {"key":"ROIC",    "title":"ROIC",                   "fmt":"percent","value":lambda r: r["ROIC"]},
+    {"key":"OCFNI",   "title":"OCF/NI",                 "fmt":"ratio",  "value":lambda r: r["OCF/NI"]},
+    {"key":"FCFMar",  "title":"هامش أرباح المالك",      "fmt":"percent","value":lambda r: r["FCF_Margin"]},
+    {"key":"IntCov",  "title":"تغطية الفوائد",           "fmt":"ratio",  "value":lambda r: r["InterestCoverage"]},
+    {"key":"CCC",     "title":"CCC (سلسلة عند توفر البيانات)", "fmt":"days", "value":None},  # يحسب بالسلسلة أدناه
+    {"key":"Revenue", "title":"الإيرادات",               "fmt":"num",    "value":lambda r: r["Revenue"]},
+    {"key":"EBIT",    "title":"EBIT",                    "fmt":"num",    "value":lambda r: r["EBIT"]},
+    {"key":"NI",      "title":"صافي الربح",              "fmt":"num",    "value":lambda r: r["NetIncome"]},
+    {"key":"OCF",     "title":"التدفق التشغيلي (OCF)",   "fmt":"num",    "value":lambda r: r["OCF"]},
+    {"key":"Capex",   "title":"Capex",                   "fmt":"num",    "value":lambda r: r["Capex"]},
+    {"key":"OE",      "title":"أرباح المالك",            "fmt":"num",    "value":lambda r: r["OwnerEarnings"]},
+]
 
-    def add_row(title, desc, cur_val, prev_val, fmt_type):
-        # fmt_type: 'num' | 'ratio' | 'percent' | 'days' | 'plain'
+# =============================
+# جدول المصفوفة (أحدث + سابقة)
+# =============================
+def render_matrix_table_rows(rcur: dict, rprev: dict):
+    def fmt(fmt_type, cur, prev):
         if fmt_type == 'percent':
-            cur_s = to_percent(cur_val); prev_s = to_percent(prev_val)
-            diff = pp_change(cur_val, prev_val)
+            cur_s, prev_s = to_percent(cur), to_percent(prev)
+            diff = pp_change(cur, prev)
             chg = f"{arrow(diff)} {abs(diff):.2f} نقطة" if diff is not None else "—"
         elif fmt_type == 'ratio':
-            cur_s = to_ratio(cur_val); prev_s = to_ratio(prev_val)
-            diff = pct_change(cur_val, prev_val)
+            cur_s, prev_s = to_ratio(cur), to_ratio(prev)
+            diff = pct_change(cur, prev)
             chg = f"{arrow(diff)} {abs(diff):.2f}%" if diff is not None else "—"
         elif fmt_type == 'days':
-            cur_s = to_days(cur_val); prev_s = to_days(prev_val)
-            diff = pct_change(cur_val, prev_val)
+            cur_s, prev_s = to_days(cur), to_days(prev)
+            diff = pct_change(cur, prev)
             chg = f"{arrow(diff)} {abs(diff):.2f}%" if diff is not None else "—"
         elif fmt_type == 'num':
-            cur_s = to_num(cur_val); prev_s = to_num(prev_val)
-            diff = pct_change(cur_val, prev_val)
+            cur_s, prev_s = to_num(cur), to_num(prev)
+            diff = pct_change(cur, prev)
             chg = f"{arrow(diff)} {abs(diff):.2f}%" if diff is not None else "—"
         else:
-            cur_s = "غير متاح" if (cur_val is None or pd.isna(cur_val)) else str(cur_val)
-            prev_s = "غير متاح" if (prev_val is None or pd.isna(prev_val)) else str(prev_val)
+            cur_s = "غير متاح" if (cur is None or pd.isna(cur)) else str(cur)
+            prev_s = "غير متاح" if (prev is None or pd.isna(prev)) else str(prev)
             chg = "—"
-        rows.append({"k": title, "d": desc, "v": cur_s, "p": prev_s, "chg": chg})
+        return cur_s, prev_s, chg
 
-    # الملاءة والسيولة
-    add_row("هيكل المديونية (D/E)", "إجمالي الدين ÷ حقوق الملكية.", 
-            safe_div(rcur["TotalDebt"], rcur["TotalEquity"]), 
-            safe_div(rprev.get("TotalDebt"), rprev.get("TotalEquity")), 'ratio')
-    add_row("السيولة الجارية (Current)", "الأصول المتداولة ÷ الخصوم المتداولة.",
-            safe_div(rcur["CurrentAssets"], rcur["CurrentLiabilities"]),
-            safe_div(rprev.get("CurrentAssets"), rprev.get("CurrentLiabilities")), 'ratio')
-    add_row("السيولة السريعة (Quick)", "استبعاد المخزون من الأصول المتداولة.",
-            rcur["QuickRatio"], rprev.get("QuickRatio"), 'ratio')
-
-    # ربحية وهوامش
-    add_row("الهامش الإجمالي", "Gross Profit ÷ Revenue.",
-            rcur["GrossMargin"], rprev.get("GrossMargin"), 'percent')
-    add_row("هامش التشغيل", "EBIT ÷ Revenue.",
-            rcur["OperatingMargin"], rprev.get("OperatingMargin"), 'percent')
-    add_row("هامش صافي", "Net Income ÷ Revenue.",
-            rcur["NetMargin"], rprev.get("NetMargin"), 'percent')
-
-    # عوائد
-    add_row("ROA", "صافي الربح ÷ إجمالي الأصول.",
-            rcur["ROA"], rprev.get("ROA"), 'percent')
-    add_row("ROE", "صافي الربح ÷ حقوق الملكية.",
-            rcur["ROE"], rprev.get("ROE"), 'percent')
-    add_row("ROIC", "NOPAT ÷ (الدين + حقوق – النقد – الاستثمارات القصيرة). (محسوب فقط عند توفر الضريبة الفعّالة)",
-            rcur["ROIC"], rprev.get("ROIC"), 'percent')
-
-    # جودة أرباح/تدفق حر
-    add_row("OCF/NI", "النقد التشغيلي ÷ صافي الربح.",
-            rcur["OCF/NI"], rprev.get("OCF/NI"), 'ratio')
-    add_row("هامش أرباح المالك", "(OCF - Capex) ÷ Revenue.",
-            rcur["FCF_Margin"], rprev.get("FCF_Margin"), 'percent')
-
-    # الفوائد والـ CCC
-    add_row("تغطية الفوائد", "EBIT ÷ مصروف الفائدة.",
-        rcur["InterestCoverage"], rprev.get("InterestCoverage"), 'ratio')
-    add_row("CCC", "DSO + DIO - DPO.",
-        rcur["CCC"], rprev.get("CCC"), 'days')
-
-    # التقييمات السوقية
-    add_row("P/E", "السعر ÷ ربح السهم.",
-        rcur["PE"], rprev.get("PE"), 'ratio')
-    add_row("P/B", "السعر ÷ القيمة الدفترية للسهم.",
-        rcur["PB"], rprev.get("PB"), 'ratio')
-    add_row("P/S", "السعر ÷ المبيعات للسهم.",
-        rcur["PS"], rprev.get("PS"), 'ratio')
-    add_row("OE Yield", "أرباح المالك ÷ القيمة السوقية.",
-        rcur["OE_Yield"], rprev.get("OE_Yield"), 'percent')
-
-    return rows
-
-def render_matrix_table(rows):
     html = ["<table class='matrix-table'>"]
     html.append("<tr><th class='k'>البند</th><th class='d'>شرح النسبة/التعريف</th><th class='v'>أحدث قيمة</th><th class='p'>سابقة</th><th class='chg'>التغيّر</th></tr>")
-    for r in rows:
+
+    explanations = {
+        "DE":"إجمالي الدين ÷ حقوق الملكية.",
+        "Current":"الأصول المتداولة ÷ الخصوم المتداولة.",
+        "Quick":"استبعاد المخزون من الأصول المتداولة.",
+        "GrossM":"Gross Profit ÷ Revenue.",
+        "OpM":"EBIT ÷ Revenue.",
+        "NetM":"Net Income ÷ Revenue.",
+        "ROA":"صافي الربح ÷ إجمالي الأصول.",
+        "ROE":"صافي الربح ÷ حقوق الملكية.",
+        "ROIC":"NOPAT ÷ (الدين + حقوق – النقد – الاستثمارات القصيرة) — يحسب فقط عند توفر الضريبة الفعّالة.",
+        "OCFNI":"النقد التشغيلي ÷ صافي الربح.",
+        "FCFMar":"(OCF - Capex) ÷ Revenue.",
+        "IntCov":"EBIT ÷ مصروف الفائدة.",
+        "CCC":"DSO + DIO - DPO (سلسلة عند توفر بيانات متتالية).",
+        "Revenue":"مبيعات/دخل تشغيلي.",
+        "EBIT":"ربح قبل الفوائد والضرائب.",
+        "NI":"الربح بعد الضرائب.",
+        "OCF":"النقد التشغيلي.",
+        "Capex":"الإنفاق الرأسمالي.",
+        "OE":"أرباح المالك = OCF - Capex."
+    }
+
+    for m in METRICS:
+        key = m["key"]; title = m["title"]; fmt_type = m["fmt"]; f = m["value"]
+        cur_val = None if f is None else f(rcur)
+        prev_val = None if f is None else f(rprev)
+        if key == "CCC":
+            # CCC للصف الحالي: استخدم قيمة اللقطة الحالية فقط (السلسلة تُحسب في لوحة الاستكشاف)
+            cur_val = np.nan
+            prev_val = np.nan
+        cur_s, prev_s, chg_s = fmt(fmt_type, cur_val, prev_val)
+        desc = explanations.get(key, "")
         html.append(
-            f"<tr>"
-            f"<td class='k'>{escape(str(r['k']))}</td>"
-            f"<td class='d'>{escape(str(r['d']))}</td>"
-            f"<td class='v'>{escape(str(r['v']))}</td>"
-            f"<td class='p'>{escape(str(r['p']))}</td>"
-            f"<td class='chg'>{escape(str(r['chg']))}</td>"
-            f"</tr>"
+            "<tr>"
+            + f"<td class='k'>{escape(title)}</td>"
+            + f"<td class='d'>{escape(desc)}</td>"
+            + f"<td class='v'>{escape(cur_s)}</td>"
+            + f"<td class='p'>{escape(prev_s)}</td>"
+            + f"<td class='chg'>{escape(chg_s)}</td>"
+            + "</tr>"
         )
     html.append("</table>")
     return "\n".join(html)
+
+# =============================
+# بناء السلسلة الزمنية لأي بند
+# =============================
+def build_timeseries(data: dict, mode: str, metric_key: str):
+    # نجمع لقطات متتالية من الأحدث للأقدم، ثم نعكس للعرض زمنياً
+    snapshots = []
+    # احسب أقصى عدد لقطات ممكنة
+    if mode == "TTM" and not data["inc_q"].empty:
+        max_n = max(0, len(sorted_cols(data["inc_q"])) - 3)  # كل نافذة 4 أرباع
+    else:
+        max_n = len(sorted_cols(data["inc_a"])) if not data["inc_a"].empty else 0
+
+    for i in range(0, max_n):
+        snap, label, meta = snapshot_for_series(data, mode, i)
+        if snap is None:
+            continue
+        snapshots.append((label, snap))
+
+    # حضّر السلسلة
+    labels = []
+    values = []
+
+    # دالة القيمة حسب المفتاح
+    getter = None
+    fmt_type = "num"
+    for m in METRICS:
+        if m["key"] == metric_key:
+            getter = m["value"]
+            fmt_type = m["fmt"]
+            break
+
+    if metric_key == "CCC":
+        # نحتاج متوسطات لاحتساب DSO/DIO/DPO عبر نقاط متعاقبة
+        # نحسب فقط حيث تتوفر نقطتان متتاليتان
+        for j in range(len(snapshots)-1, 0, -1):  # من الأقدم للأحدث
+            label = snapshots[j][0]
+            r_cur  = snapshots[j][1]
+            r_prev = snapshots[j-1][1]
+
+            # حسابات سنوية/TTM متوافقة مع كل لقطة
+            rev = r_cur["Revenue"]; cogs = r_cur["COGS"]
+            # متوسطات من الميزانية
+            ar_avg  = np.nanmean([r_cur.get("AccountsReceivable", np.nan), r_prev.get("AccountsReceivable", np.nan)])
+            # لو ما خزنا AR/AP/Inv بأسماء، نستخدم حقول الميزانية مباشرة:
+            ar_avg = np.nanmean([find_any(data["bal_q"] if mode=="TTM" else data["bal_a"], AR_KEYS, None), ar_avg]) if pd.isna(ar_avg) else ar_avg
+            ap_avg  = np.nanmean([r_cur.get("AccountsPayable", np.nan), r_prev.get("AccountsPayable", np.nan)])
+            ap_avg = np.nanmean([find_any(data["bal_q"] if mode=="TTM" else data["bal_a"], AP_KEYS, None), ap_avg]) if pd.isna(ap_avg) else ap_avg
+            inv_avg = np.nanmean([r_cur.get("Inventory", np.nan), r_prev.get("Inventory", np.nan)])
+
+            rec_turn = safe_div(rev, ar_avg)
+            pay_turn = safe_div(cogs if not pd.isna(cogs) else rev, ap_avg)
+            inv_turn = safe_div(cogs if not pd.isna(cogs) else rev, inv_avg)
+
+            dso = safe_div(365, rec_turn)
+            dpo = safe_div(365, pay_turn)
+            dio = safe_div(365, inv_turn)
+            ccc = dso + dio - dpo if not any(pd.isna(x) for x in [dso, dio, dpo]) else np.nan
+
+            labels.append(label)
+            values.append(ccc)
+        return fmt_type, labels, values
+
+    if getter is None:
+        return fmt_type, [], []
+
+    for j in range(len(snapshots)-1, -1, -1):  # من الأقدم للأحدث
+        label = snapshots[j][0]
+        r = snapshots[j][1]
+        v = getter(r)
+        labels.append(label)
+        values.append(v)
+    return fmt_type, labels, values
 
 # =============================
 # الشريط الجانبي
@@ -471,13 +538,11 @@ if st.button("🚀 تحليل الشركة"):
         st.warning("يرجى إدخال رمز واحد.")
         st.stop()
 
-    with st.spinner("جاري التحميل والتحليل بدون افتراضات..."):
+    with st.spinner("جاري التحميل والتحليل..."):
         data = load_company_data(sym)
-        r_cur  = compute_metrics_for_period(data, mode, offset=0)
-        r_prev = compute_metrics_for_period(data, mode, offset=1)
-
-        rows = build_matrix_rows(r_cur, r_prev)
-        table_html = render_matrix_table(rows)
+        # أحدث/سابقة للمصفوفة التنفيذية
+        r_cur, _, _  = snapshot_for_series(data, mode, 0)   # أحدث
+        r_prev, _, _ = snapshot_for_series(data, mode, 1)   # سابقة
         info = data.get("info", {})
 
     st.markdown(
@@ -487,23 +552,62 @@ if st.button("🚀 تحليل الشركة"):
         f"**تدفقات:** {r_cur['_meta'].get('cashflow_period','—')}"
     )
 
-    st.markdown(table_html, unsafe_allow_html=True)
+    # ====== مصفوفة المؤشرات ======
+    st.markdown(render_matrix_table_rows(r_cur, r_prev), unsafe_allow_html=True)
 
-    with st.expander("📌 نظرة عامة (مباشرة من المصدر)"):
-        sector = info.get("sector") or "—"
-        industry = info.get("industry") or "—"
-        st.write(f"- القطاع/الصناعة: **{sector} / {industry}**")
-        st.write(f"- السعر الحالي: **{to_num(r_cur['Price'])}** | القيمة السوقية: **{to_num(r_cur['MarketCap'])}**")
-        st.caption("جميع القيم محوسبة من القوائم/السوق فقط. عند غياب بند، تظهر 'غير متاح' بلا أي تعويض.")
+    # ====== منطقة النقر/الاستكشاف ======
+    st.markdown("### 🖱️ استكشف أي بند عبر الزمن")
+    if "sel_key" not in st.session_state:
+        st.session_state.sel_key = METRICS[0]["key"]
 
-    with st.expander("📈 اتجاهات بسيطة (سنوي عند توفر البيانات)"):
-        try:
-            rev_s = pd.Series({str(c): find_any(data["inc_a"], REV_KEYS, c) for c in sorted_cols(data["inc_a"])[:6]})
-            ni_s  = pd.Series({str(c): find_any(data["inc_a"], NI_KEYS,  c) for c in sorted_cols(data["inc_a"])[:6]})
-            ocf_s = pd.Series({str(c): find_any(data["cf_a"], OCF_KEYS, c) for c in sorted_cols(data["cf_a"])[:6]})
-            cap_s = pd.Series({str(c): find_any(data["cf_a"], CAPEX_KEYS, c) for c in sorted_cols(data["cf_a"])[:6]})
-            oe_s  = ocf_s - cap_s
-            chart_df = pd.DataFrame({"Revenue":rev_s, "NetIncome":ni_s, "OwnerEarnings":oe_s}).dropna(how="all")
-            st.line_chart(chart_df)
-        except Exception:
-            st.info("لا تتوفر بيانات كافية للرسم.")
+    # شبكة أزرار (Chips)
+    cols_per_row = 4
+    for i in range(0, len(METRICS), cols_per_row):
+        row = METRICS[i:i+cols_per_row]
+        cs = st.columns(len(row))
+        for j, m in enumerate(row):
+            key = m["key"]; ttl = m["title"]
+            active = (st.session_state.sel_key == key)
+            btn = cs[j].button(("✅ " if active else "") + ttl, key=f"chip_{key}")
+            if btn:
+                st.session_state.sel_key = key
+
+    # بناء السلسلة المختارة
+    fmt_type, labels, values = build_timeseries(data, mode, st.session_state.sel_key)
+
+    # جدول السلسلة + التغيرات
+    st.markdown(f"#### السلسلة الزمنية: {next((m['title'] for m in METRICS if m['key']==st.session_state.sel_key), st.session_state.sel_key)}")
+    if labels:
+        df = pd.DataFrame({"الفترة": labels, "القيمة": values})
+        # فروق
+        diffs = [None]
+        for k in range(1, len(values)):
+            if fmt_type == "percent":
+                d = pp_change(values[k], values[k-1])
+                diffs.append(None if d is None else round(d, 2))  # نقاط مئوية
+            else:
+                d = pct_change(values[k], values[k-1])
+                diffs.append(None if d is None else round(d, 2))  # %
+        df["التغير"] = diffs
+        st.dataframe(df, use_container_width=True)
+
+        # عرض كرسم
+        show_chart = st.checkbox("عرض كرسم بياني")
+        if show_chart:
+            try:
+                # نرسم القيم كما هي (Streamlit line_chart)
+                chart_df = pd.DataFrame({"value": values}, index=pd.Index(labels, name="period"))
+                st.line_chart(chart_df)
+            except Exception:
+                st.info("تعذر الرسم لهذه السلسلة.")
+    else:
+        st.info("لا تتوفر سلسلة زمنية كافية لهذا البند من المصدر.")
+
+    with st.expander("ℹ️ ملاحظات منهجية"):
+        st.markdown("""
+- **Annual**: كل نقطة تمثّل عمودًا سنويًا كما هو في Yahoo Finance.
+- **TTM**: كل نقطة = مجموع آخر 4 أرباع من نفس تاريخ النهاية، والميزانية تُطابِق تاريخ الربع الأخير قدر الإمكان.
+- **ROIC** لا يُعرض إلا إذا توفّر **Tax Expense** و **PBT** لنفس الفترة (لا افتراض لضريبة).
+- **CCC** يُحتسب فقط عندما تتوفر نقاط متتالية كافية لمتوسطات AR/AP/Inventory ومبيعات/تكلفة بضائع مطابقة زمنيًا.
+- لا حسابات تاريخية لمضاعفات تعتمد على **سعر/عدد أسهم تاريخي** (بياناتها ليست ضمن نفس الواجهة).
+""")
