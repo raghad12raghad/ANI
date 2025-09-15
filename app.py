@@ -133,6 +133,11 @@ def _fmt_pct(x, d: int = 2):
     return "—" if x is None or pd.isna(x) else f"{100*float(x):.{d}f}%"
 
 
+# مساعد تنسيق إضافي: نسبة على شكل x-times
+
+def _fmt_x(x, d: int = 2):
+    return "—" if x is None or pd.isna(x) else f"{float(x):.{d}f}x"
+
 # =============================
 # تحميل البيانات (كاش)
 # =============================
@@ -474,6 +479,131 @@ def build_sensitivity(base_fcf: float,
 
 
 # =============================
+# لوحة نسب شبيهة بالصورة — دوال المشتقات السنوية + بناء الجدول
+# =============================
+
+def compute_annual_blocks(d: Dict[str, pd.DataFrame]) -> Dict[str, Dict[str, float]]:
+    inc_a, cf_a, bal_a = d["inc_a"], d["cf_a"], d["bal_a"]
+    cols = _cols(inc_a) if not inc_a.empty else []
+    if not cols:
+        cols = _cols(cf_a) if not cf_a.empty else []
+    if not cols:
+        cols = _cols(bal_a) if not bal_a.empty else []
+    cols = cols[:2]
+    out: Dict[str, Dict[str, float]] = {}
+    for c in cols:
+        rev   = _find(inc_a, REV_KEYS, c)
+        ebit  = _find(inc_a, EBIT_KEYS, c)
+        ni    = _find(inc_a, NI_KEYS, c)
+        intex = _find(inc_a, INT_EXP_KEYS, c)
+        cfo   = _find(cf_a, CFO_KEYS, c)
+        capex = _find(cf_a, CAPEX_KEYS, c)
+        da    = _find(cf_a, DA_KEYS, c)
+        dNWC  = _find(cf_a, WC_CHANGE_KEYS, c)
+        ca    = _find(bal_a, CA_KEYS, c)
+        cl    = _find(bal_a, CL_KEYS, c)
+        te    = _find(bal_a, TE_KEYS, c)
+        cash  = _find(bal_a, CASH_KEYS, c)
+        debt  = _find(bal_a, TOT_DEBT_KEYS, c)
+        if pd.isna(debt):
+            parts = [_find(bal_a, LTD_KEYS, c), _find(bal_a, SLTD_KEYS, c), _find(bal_a, CUR_DEBT_KEYS, c)]
+            parts = [x for x in parts if not pd.isna(x)]
+            debt = sum(parts) if parts else np.nan
+        out[str(c)] = {
+            "REV": rev, "EBIT": ebit, "NI": ni, "INTEXP": intex,
+            "CFO": cfo, "CAPEX": capex, "DA": da, "dNWC": dNWC,
+            "CA": ca, "CL": cl, "TE": te, "Cash": cash, "Debt": debt
+        }
+    return out
+
+
+def build_cash_ratios_table(annual: Dict[str, Dict[str, float]]) -> pd.DataFrame:
+    years = list(annual.keys())
+    y0 = years[0] if years else None
+    y1 = years[1] if len(years) > 1 else None
+
+    def metrics_for_year(y: Optional[str]) -> Dict[str, Optional[float]]:
+        if not y or y not in annual: return {}
+        a = annual[y]
+        fcff = np.nan
+        if not any(pd.isna(x) for x in [a.get("CFO"), a.get("CAPEX")]):
+            fcff = a.get("CFO") - a.get("CAPEX")
+        cur = _safe_div(a.get("CA"), a.get("CL"))
+        de  = _safe_div(a.get("Debt"), a.get("TE"))
+        cov = _safe_div(a.get("EBIT"), abs(a.get("INTEXP")) if a.get("INTEXP") is not None else np.nan)
+        cfo_ni = _safe_div(a.get("CFO"), a.get("NI"))
+        capex_ocf = _safe_div(a.get("CAPEX"), a.get("CFO"))
+        fcff_margin = _safe_div(fcff, a.get("REV"))
+        netdebt = np.nan if a.get("Debt") is None else (a.get("Debt") - (0 if pd.isna(a.get("Cash")) else a.get("Cash")))
+        nd_fcff = _safe_div(netdebt, fcff)
+        return {
+            "CurrentRatio": cur,
+            "D_to_E": de,
+            "IntCoverage": cov,
+            "CFO_to_NI": cfo_ni,
+            "Capex_to_OCF": capex_ocf,
+            "FCFF_Margin": fcff_margin,
+            "NetDebt_to_FCFF": nd_fcff,
+            "FCFF": fcff
+        }
+
+    m0, m1 = metrics_for_year(y0), metrics_for_year(y1)
+
+    def judge(val: Optional[float], kind: str) -> str:
+        if val is None or pd.isna(val):
+            return "—"
+        v = float(val)
+        if kind == "CurrentRatio":
+            return "✅" if v >= 1.5 else ("⚠️" if v >= 1.0 else "❌")
+        if kind == "D_to_E":
+            return "✅" if v <= 0.5 else ("⚠️" if v <= 1.0 else "❌")
+        if kind == "IntCoverage":
+            return "✅" if v >= 10 else ("⚠️" if v >= 6 else "❌")
+        if kind == "CFO_to_NI":
+            return "✅" if v >= 1.0 else ("⚠️" if v >= 0.8 else "❌")
+        if kind == "Capex_to_OCF":
+            return "✅" if v <= 0.4 else ("⚠️" if v <= 0.6 else "❌")
+        if kind == "FCFF_Margin":
+            return "✅" if v >= 0.08 else ("⚠️" if v >= 0.05 else "❌")
+        if kind == "NetDebt_to_FCFF":
+            return "✅" if v <= 2.0 else ("⚠️" if v <= 3.0 else "❌")
+        return "—"
+
+    rows = []
+    def add_row(name, explain, key, target, fmt="pct"):
+        v0 = m0.get(key) if m0 else np.nan
+        v1 = m1.get(key) if m1 else np.nan
+        if fmt == "pct":
+            a0 = _fmt_pct(v0)
+            a1 = _fmt_pct(v1)
+        elif fmt == "x":
+            a0 = _fmt_x(v0)
+            a1 = _fmt_x(v1)
+        else:
+            a0 = _fmt_num(v0)
+            a1 = _fmt_num(v1)
+        verdict = judge(v0, key)
+        rows.append({
+            "البند": name,
+            "شرح النسبة": explain,
+            str(y0 or "أحدث"): a0,
+            (str(y1) if y1 else "السنة السابقة"): a1,
+            "المعيار/المستهدف": target,
+            "رأي فني": verdict
+        })
+
+    add_row("السيولة الجارية", "الأصول المتداولة ÷ الخصوم المتداولة", "CurrentRatio", "≥ 1.5", fmt="x")
+    add_row("المديونية D/E", "إجمالي الدين ÷ حقوق الملكية", "D_to_E", "≤ 0.5 (≤1.0 مقبول)", fmt="x")
+    add_row("تغطية الفوائد", "EBIT ÷ مصروف الفائدة", "IntCoverage", "≥ 10x (≥6x مقبول)", fmt="x")
+    add_row("جودة الأرباح", "CFO ÷ صافي الربح", "CFO_to_NI", "≥ 1.0", fmt="x")
+    add_row("كثافة الاستثمار", "Capex ÷ OCF", "Capex_to_OCF", "≤ 40%", fmt="pct")
+    add_row("هامش FCFF", "(CFO−Capex) ÷ الإيراد", "FCFF_Margin", "≥ 8%", fmt="pct")
+    add_row("صافي الدين/FCFF", "(الدين−النقد) ÷ FCFF", "NetDebt_to_FCFF", "≤ 2.0x", fmt="x")
+
+    df = pd.DataFrame(rows)
+    return df
+
+# =============================
 # واجهة المستخدم
 # =============================
 st.markdown("""
@@ -627,6 +757,16 @@ if st.button("🚀 قيّم الشركة"):
         "NWC": _fmt_num(bal.get("NWC")),
     }]
     st.dataframe(pd.DataFrame(bal_rows), use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📋 لوحة نسب نقدية/تقييم (شكل مشابه للصورة)")
+    try:
+        annual = compute_annual_blocks(data)
+        ratios_df = build_cash_ratios_table(annual)
+        st.dataframe(ratios_df, use_container_width=True)
+        st.caption("ملاحظة: الأعوام تمثل آخر سنتين سنويتين متاحتين في Yahoo؛ قد تختلف تواريخ الإقفال بين الشركات. القيم '—' تعني عدم توفر بيانات.")
+    except Exception as e:
+        st.info(f"تعذر بناء اللوحة لعدم كفاية البيانات: {e}")
 
     st.markdown("---")
     st.subheader("📜 مذكرة تقييم مختصرة")
